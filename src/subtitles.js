@@ -4,7 +4,6 @@ const { decodeConfig } = require('./config');
 const { outputLang } = require('./opencc');
 const { listSubtitles, normalizeLang, langAllowed, langList } = require('./sources');
 const { encodeToken } = require('./token');
-const { PROVIDERS, providerChain } = require('./translate');
 
 /**
  * Stremio `subtitles` resource handler.
@@ -13,10 +12,9 @@ const { PROVIDERS, providerChain } = require('./translate');
  * file is never sent to the player directly.
  *
  * When the video has no Chinese subtitle at all, the configured fallback
- * languages (English by default) are machine translated instead, by the first
- * provider in the chain that works (Google Translate, then DeepL). Translation
- * happens on download, not here, so quota is spent only on the subtitle the
- * viewer actually picks.
+ * languages (English by default) are machine translated with Google Translate
+ * instead. Translation happens on download, not here, so a request is spent
+ * only on the subtitle the viewer actually picks.
  *
  * Sources routinely list the same file several times, and a popular film can
  * carry dozens of releases. Stremio's picker shows one row per entry, so
@@ -127,11 +125,10 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 	const subtitles = [];
 
 	const chinese = dedupe(items.filter((item) => langAllowed(cfg, item.lang))).slice(0, MAX_CONVERTED_ENTRIES);
-	const chain = providerChain(cfg);
-	const translatable = chinese.length || !chain.length ? [] : fallbackCandidates(cfg, dedupe(items));
-	// The label names the provider that will normally serve the entry; a failed
-	// provider silently hands over to the next one in the chain.
-	const fallbackLabel = `繁體中文（${PROVIDERS[chain[0]] ? PROVIDERS[chain[0]].shortName : '機翻'}）`;
+	// `fallbackCandidates` already yields nothing when no fallback language is
+	// configured, so an empty list is the only switch needed here.
+	const translatable = chinese.length ? [] : fallbackCandidates(cfg, dedupe(items));
+	const fallbackLabel = '繁體中文（Google）';
 
 	for (const item of chinese) {
 		subtitles.push({
@@ -153,7 +150,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 
 	for (const item of translatable) {
 		subtitles.push({
-			id: `deepl:${item.id}`,
+			id: `machine:${item.id}`,
 			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
 				u: item.url,
 				f: item.fileId,

@@ -2,7 +2,8 @@
 
 const iconv = require('iconv-lite');
 const { convertSubtitle, TRADITIONAL_TARGETS } = require('./opencc');
-const { translateSubtitle } = require('./translate');
+const { translateSubtitle } = require('./google');
+const { toGoogleSource, toGoogleTarget } = require('./langs');
 const { resolveDownloadLink } = require('./sources');
 const { decodeToken } = require('./token');
 const stats = require('./stats');
@@ -70,17 +71,20 @@ async function downloadSubtitle(url) {
 }
 
 /**
- * Machine translates a subtitle through the configured provider chain.
+ * Machine translates a subtitle with Google Translate.
  *
- * Both providers already return Traditional Chinese for a Traditional target,
- * but neither applies the exact variant the viewer picked, so the configured
- * OpenCC pair is run afterwards when the target is a Traditional variant. That
- * step is a no-op for character conversion and only localises wording.
+ * Google already returns Traditional Chinese for a Traditional target, but it
+ * does not apply the exact variant the viewer picked, so the configured OpenCC
+ * pair is run afterwards when the target is a Traditional variant. That step is
+ * a no-op for character conversion and only localises wording.
  *
- * @returns {{ body: string, characters: number, requests: number, provider: string, providerName: string }}
+ * @returns {{ body: string, characters: number, requests: number }}
  */
 async function translateSubtitleFile(source, cfg, handle) {
-	const result = await translateSubtitle(source, cfg, handle);
+	const result = await translateSubtitle(source, {
+		sourceLang: toGoogleSource(handle.sourceLang),
+		targetLang: toGoogleTarget(cfg.to),
+	});
 
 	let body = result.text;
 	if (TRADITIONAL_TARGETS.has(cfg.to)) {
@@ -91,13 +95,7 @@ async function translateSubtitleFile(source, cfg, handle) {
 		}
 	}
 
-	return {
-		body,
-		characters: result.characters,
-		requests: result.requests,
-		provider: result.provider,
-		providerName: result.providerName,
-	};
+	return { body, characters: result.characters, requests: result.requests };
 }
 
 /**
@@ -112,7 +110,7 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	const cacheKey = `${configSegment}:${token}`;
 	const hit = cacheGet(cacheKey);
 	if (hit) {
-		// A hit skipped both the download and any DeepL translation.
+		// A hit skipped both the download and the machine translation.
 		stats.recordCacheHit(hit.meta.translatedCharacters || 0);
 		return hit.value;
 	}
@@ -140,7 +138,6 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 			stats.recordTranslation({
 				characters: translated.characters,
 				requests: translated.requests,
-				provider: translated.provider,
 			});
 		} catch (error) {
 			stats.recordTranslationError(error.message);

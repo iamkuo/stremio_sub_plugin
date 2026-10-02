@@ -7,7 +7,6 @@ const path = require('path');
 const { DEFAULTS, encodeConfig, normalizeConfig, decodeConfig } = require('./config');
 const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
-const { fetchUsage } = require('./deepl');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
 const stats = require('./stats');
@@ -131,34 +130,11 @@ async function handlePreviewApi(req, res) {
 	});
 }
 
-/** POST /api/deepl-usage – validates the viewer's DeepL key and reads its quota. */
-async function handleDeeplUsage(req, res) {
-	let payload;
-	try {
-		payload = JSON.parse((await readBody(req)) || '{}');
-	} catch {
-		return sendJson(res, 400, { error: 'invalid JSON body' });
-	}
-
-	const cfg = normalizeConfig(payload.settings || payload || {});
-	if (!cfg.deeplKey) return sendJson(res, 200, { ok: false, error: '尚未填入 DeepL API Key' });
-
-	try {
-		const usage = await fetchUsage(cfg.deeplKey);
-		stats.setUsage(usage);
-		sendJson(res, 200, { ok: true, ...usage, alert: stats.snapshot().alert });
-	} catch (error) {
-		stats.setUsageError(error.message);
-		sendJson(res, 200, { ok: false, error: error.message });
-	}
-}
-
 /* ------------------------------------------------------------------ *
- * DeepL usage dashboard
+ * Live dashboard
  *
  * The page never polls: it registers a watch, then receives server-sent
- * snapshots whenever a metric changes. Account usage is only refreshed while
- * somebody is actually watching, so no background traffic is generated.
+ * snapshots whenever a metric changes.
  * ------------------------------------------------------------------ */
 
 const STREAM_KEEPALIVE = 20000;
@@ -169,52 +145,30 @@ function statsPayload() {
 	return { ok: true, error: null, ...stats.snapshot() };
 }
 
-/** Refreshes the authoritative DeepL account usage if the cached copy is old. */
-async function refreshUsageIfStale(deeplKey) {
-	// Without a key there is no account to read; the dashboard still shows the
-	// cache and translation counters.
-	if (!deeplKey || stats.usageIsFresh()) return;
-	try {
-		const usage = await fetchUsage(deeplKey);
-		stats.setUsage(usage);
-		const { alert } = stats.snapshot();
-		if (alert.level === 'warn' || alert.level === 'critical') {
-			console.warn(`[stats] ${alert.message}`);
-		}
-	} catch (error) {
-		stats.setUsageError(error.message);
-	}
-}
-
 async function readSettings(req) {
 	const payload = JSON.parse((await readBody(req)) || '{}');
 	return normalizeConfig(payload.settings || payload || {});
 }
 
-/** POST /api/stats/watch – registers a short-lived, key-free stream handle. */
+/** POST /api/stats/watch – registers a short-lived stream handle. */
 async function handleStatsWatch(req, res) {
-	let cfg;
 	try {
-		cfg = await readSettings(req);
+		await readSettings(req);
 	} catch {
 		return sendJson(res, 400, { error: 'invalid JSON body' });
 	}
 
-	// The key is optional: Google Translate needs none, and the cache counters
-	// are worth watching on their own.
-	sendJson(res, 200, { ok: true, id: stats.createWatch({ deeplKey: cfg.deeplKey || '' }) });
+	sendJson(res, 200, { ok: true, id: stats.createWatch({}) });
 }
 
 /** POST /api/stats/once – one-shot snapshot, used when streaming is unavailable. */
 async function handleStatsOnce(req, res) {
-	let cfg;
 	try {
-		cfg = await readSettings(req);
+		await readSettings(req);
 	} catch {
 		return sendJson(res, 400, { error: 'invalid JSON body' });
 	}
 
-	await refreshUsageIfStale(cfg.deeplKey);
 	sendJson(res, 200, statsPayload());
 }
 
@@ -263,8 +217,6 @@ function handleStatsStream(req, res, url) {
 	};
 	req.on('close', close);
 	res.on('close', close);
-
-	refreshUsageIfStale(watch.settings.deeplKey).catch(() => {});
 }
 
 const server = http.createServer(async (req, res) => {
@@ -286,9 +238,6 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'preview') {
 			return handlePreviewApi(req, res);
-		}
-		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'deepl-usage') {
-			return handleDeeplUsage(req, res);
 		}
 		if (segments[0] === 'api' && segments[1] === 'stats') {
 			if (req.method === 'GET' && segments[2] === 'stream') {

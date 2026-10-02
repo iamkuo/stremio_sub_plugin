@@ -6,7 +6,7 @@
  * This calls the same endpoint the Chrome translation extension uses
  * (`client=dict-chrome-ex`). It is undocumented and unauthenticated, so it is
  * treated as best effort: two hosts are tried, each failure is retried once,
- * and the caller's chain moves on to DeepL when this gives up.
+ * and a genuine failure surfaces as a readable error in the subtitle.
  *
  * Only `translate_a/t` is used. The better known
  * `translate_a/single?client=gtx` variant answers HTTP 429 from datacenter IPs,
@@ -22,7 +22,7 @@ const CLIENT = 'dict-chrome-ex';
 const USER_AGENT =
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-/** Mirrors the DeepL limits so both providers behave the same way. */
+/** Keeps each request small enough to stay comfortably inside URL limits. */
 const MAX_TEXTS_PER_REQUEST = 50;
 /** Query strings are kept well under the ~8 KB that was verified to work. */
 const MAX_QUERY_LENGTH = 6000;
@@ -119,7 +119,8 @@ async function requestBatch(texts, options) {
 		}
 	}
 
-	throw new Error(`Google 翻譯失敗（${errors.join('；')}）`);
+	// 502: the failure is upstream, not in the viewer's request.
+	throw Object.assign(new Error(`Google 翻譯失敗（${errors.join('；')}）`), { statusCode: 502 });
 }
 
 /**

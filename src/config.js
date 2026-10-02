@@ -17,10 +17,8 @@ const DEFAULTS = {
 	sourceUrl: 'https://opensubtitles-v3.strem.io',
 	apiKey: '', // OpenSubtitles.com API key
 	customDict: '',
-	// DeepL fallback: used only when no Chinese subtitle exists for the video.
-	deeplKey: '', // the viewer's own DeepL API key
-	fallbackLangs: 'eng', // languages to machine translate when no Chinese subtitle exists
-	fallbackProvider: 'auto', // 'auto' = Google then DeepL, or force 'google' / 'deepl'
+	// Machine translation, used only when no Chinese subtitle exists at all.
+	fallbackLangs: 'eng', // source languages to translate from, e.g. 'eng,jpn'
 	fallbackLimit: 1, // how many fallback candidates to offer; 1 keeps the picker minimal
 };
 
@@ -34,14 +32,11 @@ const KEYMAP = {
 	sourceUrl: 'u',
 	apiKey: 'a',
 	customDict: 'd',
-	deeplKey: 'dk',
 	fallbackLangs: 'fl',
-	fallbackProvider: 'fp',
 	fallbackLimit: 'fn',
 };
 
 const PROVIDERS = ['v3', 'rest'];
-const FALLBACK_PROVIDERS = ['auto', 'google', 'deepl'];
 /** Upper bound for the configurable fallback list length. */
 const MAX_FALLBACK_LIMIT = 5;
 
@@ -78,9 +73,7 @@ function normalizeConfig(raw) {
 	cfg.sourceUrl = String(cfg.sourceUrl || '').trim() || DEFAULTS.sourceUrl;
 	cfg.apiKey = String(cfg.apiKey || '').trim();
 	cfg.customDict = String(cfg.customDict || '');
-	cfg.deeplKey = String(cfg.deeplKey || '').trim();
 	cfg.fallbackLangs = String(cfg.fallbackLangs || '').trim();
-	cfg.fallbackProvider = FALLBACK_PROVIDERS.includes(cfg.fallbackProvider) ? cfg.fallbackProvider : 'auto';
 	cfg.fallbackLimit = clampFallbackLimit(cfg.fallbackLimit);
 	return cfg;
 }
@@ -112,7 +105,6 @@ module.exports = {
 	DEFAULTS,
 	KEYMAP,
 	PROVIDERS,
-	FALLBACK_PROVIDERS,
 	MAX_FALLBACK_LIMIT,
 	clampFallbackLimit,
 	encodeConfig,

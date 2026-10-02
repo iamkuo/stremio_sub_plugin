@@ -4,9 +4,9 @@
  * Language-code plumbing.
  *
  * Stremio subtitle sources hand out ISO 639-2/B three-letter codes (`eng`,
- * `zht`), while DeepL and the OpenSubtitles.com REST API expect two-letter
- * codes (`EN`, `en`, `zh-tw`). Everything is normalised to lower case on the
- * way in and mapped on the way out.
+ * `zht`), while Google Translate and the OpenSubtitles.com REST API expect
+ * two-letter codes (`en`, `zh-tw`). Everything is normalised to lower case on
+ * the way in and mapped on the way out.
  */
 
 /** Lower-cases and unifies separators so `zh_TW` and `ZH-tw` compare equal. */
@@ -14,74 +14,65 @@ function normalizeLang(lang) {
 	return String(lang || '').toLowerCase().replace(/_/g, '-').trim();
 }
 
-/** Stremio language code -> DeepL source language. */
-const DEEPL_SOURCES = {
-	eng: 'EN', en: 'EN',
-	jpn: 'JA', ja: 'JA',
-	kor: 'KO', ko: 'KO',
-	fra: 'FR', fre: 'FR', fr: 'FR',
-	deu: 'DE', ger: 'DE', de: 'DE',
-	spa: 'ES', es: 'ES',
-	ita: 'IT', it: 'IT',
-	por: 'PT', pt: 'PT',
-	rus: 'RU', ru: 'RU',
-	ara: 'AR', ar: 'AR',
-	hin: 'HI', hi: 'HI',
-	tha: 'TH', th: 'TH',
-	vie: 'VI', vi: 'VI',
-	ind: 'ID', id: 'ID',
-	tur: 'TR', tr: 'TR',
-	pol: 'PL', pl: 'PL',
-	nld: 'NL', dut: 'NL', nl: 'NL',
-	swe: 'SV', sv: 'SV',
-	dan: 'DA', da: 'DA',
-	fin: 'FI', fi: 'FI',
-	nor: 'NB', nb: 'NB',
-	ces: 'CS', cze: 'CS', cs: 'CS',
-	ell: 'EL', gre: 'EL', el: 'EL',
-	heb: 'HE', he: 'HE',
-	hun: 'HU', hu: 'HU',
-	ron: 'RO', rum: 'RO', ro: 'RO',
-	ukr: 'UK', uk: 'UK',
-	bul: 'BG', bg: 'BG',
-	hrv: 'HR', hr: 'HR',
-	srp: 'SR', sr: 'SR',
-	slk: 'SK', sk: 'SK',
-	slv: 'SL', sl: 'SL',
-	lit: 'LT', lt: 'LT',
-	lav: 'LV', lv: 'LV',
-	est: 'ET', et: 'ET',
-	cat: 'CA', ca: 'CA',
-	msa: 'MS', may: 'MS', ms: 'MS',
-	fil: 'TL', tgl: 'TL', tl: 'TL',
-	ben: 'BN', bn: 'BN',
-	tam: 'TA', ta: 'TA',
-	tel: 'TE', te: 'TE',
-	urd: 'UR', ur: 'UR',
-	fas: 'FA', per: 'FA', fa: 'FA',
-	swa: 'SW', sw: 'SW',
-	afr: 'AF', af: 'AF',
-	isl: 'IS', ice: 'IS', is: 'IS',
-	mkd: 'MK', mk: 'MK',
-	sqi: 'SQ', alb: 'SQ', sq: 'SQ',
-	kat: 'KA', geo: 'KA', ka: 'KA',
-	aze: 'AZ', az: 'AZ',
-	kaz: 'KK', kk: 'KK',
-	uzb: 'UZ', uz: 'UZ',
-	yue: 'YUE',
-	// DeepL cannot read `ZH-HANT`/`ZH-HANS` as a source, only `ZH`.
-	zho: 'ZH', chi: 'ZH', zh: 'ZH', zht: 'ZH', chs: 'ZH', cht: 'ZH',
-};
-
-/** OpenCC target locale -> DeepL target language. */
-const DEEPL_TARGETS = {
-	cn: 'ZH-HANS',
-	t: 'ZH-HANT',
-	tw: 'ZH-HANT',
-	twp: 'ZH-HANT',
-	hk: 'ZH-HANT',
-	hkp: 'ZH-HANT',
-	jp: 'JA',
+/**
+ * Stremio language code -> Google source language. Google uses lower-case
+ * codes. Cantonese is deliberately absent: Google does not support it, so the
+ * caller omits `sl` and lets the service detect the language itself.
+ */
+const GOOGLE_SOURCES = {
+	eng: 'en', en: 'en',
+	jpn: 'ja', ja: 'ja',
+	kor: 'ko', ko: 'ko',
+	fra: 'fr', fre: 'fr', fr: 'fr',
+	deu: 'de', ger: 'de', de: 'de',
+	spa: 'es', es: 'es',
+	ita: 'it', it: 'it',
+	por: 'pt', pt: 'pt',
+	rus: 'ru', ru: 'ru',
+	ara: 'ar', ar: 'ar',
+	hin: 'hi', hi: 'hi',
+	tha: 'th', th: 'th',
+	vie: 'vi', vi: 'vi',
+	ind: 'id', id: 'id',
+	tur: 'tr', tr: 'tr',
+	pol: 'pl', pl: 'pl',
+	nld: 'nl', dut: 'nl', nl: 'nl',
+	swe: 'sv', sv: 'sv',
+	dan: 'da', da: 'da',
+	fin: 'fi', fi: 'fi',
+	nor: 'nb', nb: 'nb',
+	ces: 'cs', cze: 'cs', cs: 'cs',
+	ell: 'el', gre: 'el', el: 'el',
+	heb: 'he', he: 'he',
+	hun: 'hu', hu: 'hu',
+	ron: 'ro', rum: 'ro', ro: 'ro',
+	ukr: 'uk', uk: 'uk',
+	bul: 'bg', bg: 'bg',
+	hrv: 'hr', hr: 'hr',
+	srp: 'sr', sr: 'sr',
+	slk: 'sk', sk: 'sk',
+	slv: 'sl', sl: 'sl',
+	lit: 'lt', lt: 'lt',
+	lav: 'lv', lv: 'lv',
+	est: 'et', et: 'et',
+	cat: 'ca', ca: 'ca',
+	msa: 'ms', may: 'ms', ms: 'ms',
+	fil: 'tl', tgl: 'tl', tl: 'tl',
+	ben: 'bn', bn: 'bn',
+	tam: 'ta', ta: 'ta',
+	tel: 'te', te: 'te',
+	urd: 'ur', ur: 'ur',
+	fas: 'fa', per: 'fa', fa: 'fa',
+	swa: 'sw', sw: 'sw',
+	afr: 'af', af: 'af',
+	isl: 'is', ice: 'is', is: 'is',
+	mkd: 'mk', mk: 'mk',
+	sqi: 'sq', alb: 'sq', sq: 'sq',
+	kat: 'ka', geo: 'ka', ka: 'ka',
+	aze: 'az', az: 'az',
+	kaz: 'kk', kk: 'kk',
+	uzb: 'uz', uz: 'uz',
+	zho: 'zh', chi: 'zh', zh: 'zh', zht: 'zh', chs: 'zh', cht: 'zh',
 };
 
 /** OpenCC target locale -> Google `tl` code. Google has no `zh-HK`. */
@@ -136,29 +127,12 @@ function lookup(map, lang) {
 	return map[normalized.split('-')[0]] || null;
 }
 
-/** DeepL source language for a Stremio code, or null to let DeepL auto-detect. */
-function toDeepLSource(lang) {
-	return lookup(DEEPL_SOURCES, lang);
-}
-
-/** DeepL target language for an OpenCC locale. */
-function toDeepLTarget(locale) {
-	return DEEPL_TARGETS[locale] || 'ZH-HANT';
-}
-
-/** OpenSubtitles.com REST language code for a Stremio code. */
-function toRestCode(lang) {
-	return lookup(REST_CODES, lang);
-}
-
 /**
- * Google source language for a Stremio code. Google uses lower-case codes and
- * has no Cantonese, so those fall back to automatic detection.
+ * Google source language for a Stremio code, or null to let Google detect the
+ * language itself (which is what happens for unsupported codes like `yue`).
  */
 function toGoogleSource(lang) {
-	const code = lookup(DEEPL_SOURCES, lang);
-	if (!code || code === 'YUE') return null;
-	return code.toLowerCase();
+	return lookup(GOOGLE_SOURCES, lang);
 }
 
 /** Google target language for an OpenCC locale. */
@@ -166,14 +140,17 @@ function toGoogleTarget(locale) {
 	return GOOGLE_TARGETS[locale] || 'zh-TW';
 }
 
+/** OpenSubtitles.com REST language code for a Stremio code. */
+function toRestCode(lang) {
+	return lookup(REST_CODES, lang);
+}
+
 module.exports = {
 	normalizeLang,
-	toDeepLSource,
-	toDeepLTarget,
 	toGoogleSource,
 	toGoogleTarget,
 	toRestCode,
-	DEEPL_SOURCES,
+	GOOGLE_SOURCES,
 	GOOGLE_TARGETS,
 	REST_CODES,
 };

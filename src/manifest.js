@@ -8,6 +8,7 @@ const manifest = {
 	name: 'OpenCC 簡繁轉換字幕',
 	description:
 		'使用 OpenCC 將簡體中文字幕即時轉換為繁體中文（台灣／香港／OpenCC 標準，可自訂詞彙）。' +
+		'完全沒有中文字幕時，可用免金鑰的 Google 翻譯產生繁體字幕。' +
 		'字幕來源為 OpenSubtitles，可於設定頁選擇轉換模式、來源與語言。',
 	resources: ['subtitles'],
 	types: ['movie', 'series'],

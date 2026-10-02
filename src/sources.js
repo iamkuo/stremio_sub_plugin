@@ -12,7 +12,7 @@
  * Listing returns every candidate the source offers; deciding which of them
  * are usable is the caller's job (see subtitles.js), because the addon keeps
  * two separate allow lists: Chinese subtitles for OpenCC conversion, and
- * fallback languages for DeepL translation.
+ * fallback languages for machine translation.
  */
 
 const { normalizeLang, toRestCode } = require('./langs');
