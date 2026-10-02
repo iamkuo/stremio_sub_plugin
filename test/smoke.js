@@ -68,6 +68,15 @@ const MOCK_IDS = {
 	tt3333333: { body: TRADITIONAL_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'zht' },
 	tt4444444: { body: ENGLISH_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'eng' },
 	tt5555555: { body: LONG_ENGLISH_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'eng' },
+	// Sources routinely repeat the same file and list many releases at once.
+	tt6666666: {
+		body: SIMPLIFIED_SRT,
+		encoding: 'utf8',
+		contentType: 'application/x-subrip; charset=utf-8',
+		lang: 'zht',
+		repeat: 4,
+		variants: 12,
+	},
 };
 
 /** A minimal OpenSubtitles-v3-compatible subtitle source. */
@@ -88,13 +97,24 @@ const mockSource = http.createServer((req, res) => {
 		// fallback source when there is none.
 		subtitles.push({ id: `${id}-eng`, url: fileUrl, lang: 'eng', subtitleFileName: `${id}.eng.srt` });
 	}
+	for (let index = 0; index < (file.variants || 0); index += 1) {
+		subtitles.push({
+			id: `${id}-v${index}`,
+			url: `${fileUrl}?v=${index}`,
+			lang: file.lang,
+			subtitleFileName: `${id}.release${index}.1080p.WEB-DL.${file.lang}.srt`,
+		});
+	}
+	for (let index = 0; index < (file.repeat || 0); index += 1) {
+		subtitles.push({ id: `${id}-dup${index}`, url: fileUrl, lang: file.lang, subtitleFileName: `${id}.${file.lang}.srt` });
+	}
 
 	res.writeHead(200, { 'Content-Type': 'application/json' });
 	res.end(JSON.stringify({ subtitles }));
 });
 
 const mockFiles = http.createServer((req, res) => {
-	const id = req.url.split('/').pop();
+	const id = req.url.split('/').pop().split('?')[0];
 	const file = MOCK_IDS[id];
 	if (!file) {
 		res.writeHead(404);
@@ -148,6 +168,7 @@ const { encodeConfig, decodeConfig } = require('../src/config');
 const { convertSubtitle, looksSimplified } = require('../src/opencc');
 const { batchTexts, splitSegments, apiHost } = require('../src/deepl');
 const { toDeepLSource, toDeepLTarget } = require('../src/langs');
+	const { composeLabel, releaseLabel, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
 
 const BASE = `http://127.0.0.1:${PORT}`;
 const SOURCE_URL = `http://127.0.0.1:${MOCK_PORT}`;
@@ -246,6 +267,13 @@ function unitTests() {
 
 	// Batching respects the 50-text limit.
 	assert.strictEqual(batchTexts(Array.from({ length: 120 }, () => 'x')).length, 3);
+
+	// Compact, descriptive labels.
+	assert.strictEqual(composeLabel('繁體中文', ''), '繁體中文');
+	assert.strictEqual(composeLabel('繁體中文', 'Inception.2010.720p.srt'), '繁體中文 · Inception 2010 720p');
+	assert.strictEqual(releaseLabel('a'.repeat(80)).length, RELEASE_LABEL_LIMIT);
+	assert.ok(composeLabel('繁體中文', 'a'.repeat(80)).endsWith('…'));
+	assert.ok(composeLabel('繁體中文', 'a'.repeat(80)).length <= RELEASE_LABEL_LIMIT + 8);
 	console.log('unit      ok');
 }
 
@@ -320,6 +348,17 @@ async function conversionTests() {
 	// Unknown id -> empty list, no error.
 	const empty = await getJson(`/${CFG}/subtitles/movie/tt9999999.json`);
 	assert.deepStrictEqual(empty.json, { subtitles: [] });
+
+	// Duplicate files are collapsed and the picker stays short.
+	const many = await getJson(`/${CFG}/subtitles/movie/tt6666666.json`);
+	const manyUrls = many.json.subtitles.map((sub) => sub.url);
+	assert.strictEqual(new Set(manyUrls).size, manyUrls.length, 'the same file must not be listed twice');
+	assert.strictEqual(many.json.subtitles.length, 10, '5 releases x (converted + raw)');
+
+	const labels = many.json.subtitles.map((sub) => sub.label);
+	assert.ok(labels.every((label) => label.startsWith('繁體中文 · ') || label.startsWith('簡體原文 · ')));
+	assert.ok(labels.every((label) => label.length <= 34), 'labels must stay compact');
+	assert.ok(labels.every((label) => !label.includes('.srt')), 'labels must not leak the file extension');
 	console.log('converted ok');
 }
 
@@ -337,6 +376,7 @@ async function deeplTests() {
 	assert.strictEqual(list.json.subtitles.length, 1);
 	assert.ok(list.json.subtitles[0].id.startsWith('deepl:'), 'fallback entries must be marked as translated');
 	assert.strictEqual(list.json.subtitles[0].lang, 'zht');
+	assert.ok(list.json.subtitles[0].label.startsWith('繁體中文（DeepL）'), 'translated entries must say so');
 
 	const translated = await get(new URL(list.json.subtitles[0].url).pathname);
 	assert.strictEqual(translated.status, 200);
