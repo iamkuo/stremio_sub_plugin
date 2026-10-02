@@ -2,15 +2,16 @@
 
 const iconv = require('iconv-lite');
 const { convertSubtitle, TRADITIONAL_TARGETS } = require('./opencc');
-const { toDeepLSource, toDeepLTarget } = require('./langs');
-const { translateSubtitle } = require('./deepl');
+const { translateSubtitle } = require('./translate');
 const { resolveDownloadLink } = require('./sources');
 const { decodeToken } = require('./token');
+const stats = require('./stats');
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const CACHE_LIMIT = 200;
 const cache = new Map();
 
+/** @returns {{ value: object, meta: object } | null} */
 function cacheGet(key) {
 	const hit = cache.get(key);
 	if (!hit) return null;
@@ -18,15 +19,16 @@ function cacheGet(key) {
 		cache.delete(key);
 		return null;
 	}
-	return hit.value;
+	return hit;
 }
 
-function cacheSet(key, value) {
+function cacheSet(key, value, meta = {}) {
 	if (cache.size >= CACHE_LIMIT) {
 		const oldest = cache.keys().next().value;
 		cache.delete(oldest);
 	}
-	cache.set(key, { value, expires: Date.now() + CACHE_TTL });
+	cache.set(key, { value, meta, expires: Date.now() + CACHE_TTL });
+	stats.recordCacheEntries(cache.size);
 }
 
 /**
@@ -42,7 +44,7 @@ function decodeBuffer(buffer, contentType) {
 	if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) return iconv.decode(buffer, 'utf16be');
 
 	const declared = /charset=["']?([\w-]+)/i.exec(contentType || '');
-	if (declared && !/utf-?8/i.test(declared[1])) {
+	if (declared && !/utf-8/i.test(declared[1])) {
 		const decoded = iconv.decode(buffer, declared[1]);
 		if (!decoded.includes('\uFFFD')) return decoded;
 	}
@@ -68,33 +70,34 @@ async function downloadSubtitle(url) {
 }
 
 /**
- * Machine translates a subtitle with the viewer's own DeepL key.
+ * Machine translates a subtitle through the configured provider chain.
  *
- * DeepL's `ZH-HANT` output is already Traditional Chinese, but it does not
- * apply Taiwan/Hong Kong vocabulary, so the configured OpenCC pair is run
- * afterwards when the target is a Traditional variant. That step is a no-op
- * for character conversion and only localises wording.
+ * Both providers already return Traditional Chinese for a Traditional target,
+ * but neither applies the exact variant the viewer picked, so the configured
+ * OpenCC pair is run afterwards when the target is a Traditional variant. That
+ * step is a no-op for character conversion and only localises wording.
+ *
+ * @returns {{ body: string, characters: number, requests: number, provider: string, providerName: string }}
  */
-async function translateWithDeepL(source, cfg, handle) {
-	if (!cfg.deeplKey) {
-		throw Object.assign(new Error('這個字幕需要 DeepL 翻譯，但尚未設定 DeepL API Key'), { statusCode: 400 });
-	}
+async function translateSubtitleFile(source, cfg, handle) {
+	const result = await translateSubtitle(source, cfg, handle);
 
-	const targetLang = toDeepLTarget(cfg.to);
-	const result = await translateSubtitle(source, {
-		apiKey: cfg.deeplKey,
-		sourceLang: toDeepLSource(handle.sourceLang),
-		targetLang,
-	});
-
+	let body = result.text;
 	if (TRADITIONAL_TARGETS.has(cfg.to)) {
 		try {
-			return convertSubtitle(result.text, { ...cfg, mode: 'always' }).text;
+			body = convertSubtitle(result.text, { ...cfg, mode: 'always' }).text;
 		} catch {
-			return result.text;
+			body = result.text;
 		}
 	}
-	return result.text;
+
+	return {
+		body,
+		characters: result.characters,
+		requests: result.requests,
+		provider: result.provider,
+		providerName: result.providerName,
+	};
 }
 
 /**
@@ -107,8 +110,13 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	if (!handle) throw Object.assign(new Error('無效的字幕連結'), { statusCode: 400 });
 
 	const cacheKey = `${configSegment}:${token}`;
-	const cached = cacheGet(cacheKey);
-	if (cached) return cached;
+	const hit = cacheGet(cacheKey);
+	if (hit) {
+		// A hit skipped both the download and any DeepL translation.
+		stats.recordCacheHit(hit.meta.translatedCharacters || 0);
+		return hit.value;
+	}
+	stats.recordCacheMiss();
 
 	let url = handle.url;
 	if (!url && handle.fileId) url = await resolveDownloadLink(cfg, handle.fileId);
@@ -121,9 +129,26 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	const extension = /\.vtt$/i.test(handle.name || '') ? 'vtt' : 'srt';
 
 	let body;
-	if (handle.raw) body = source;
-	else if (handle.translate) body = await translateWithDeepL(source, cfg, handle);
-	else body = convertSubtitle(source, cfg).text;
+	let translatedCharacters = 0;
+	if (handle.raw) {
+		body = source;
+	} else if (handle.translate) {
+		try {
+			const translated = await translateSubtitleFile(source, cfg, handle);
+			body = translated.body;
+			translatedCharacters = translated.characters;
+			stats.recordTranslation({
+				characters: translated.characters,
+				requests: translated.requests,
+				provider: translated.provider,
+			});
+		} catch (error) {
+			stats.recordTranslationError(error.message);
+			throw error;
+		}
+	} else {
+		body = convertSubtitle(source, cfg).text;
+	}
 
 	const result = {
 		body,
@@ -131,8 +156,8 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 		filename: `${baseName}.${extension}`,
 	};
 
-	cacheSet(cacheKey, result);
+	cacheSet(cacheKey, result, { translatedCharacters });
 	return result;
 }
 
-module.exports = { buildSubtitleFile, decodeBuffer, translateWithDeepL };
+module.exports = { buildSubtitleFile, decodeBuffer, translateSubtitleFile, cacheSize: () => cache.size };

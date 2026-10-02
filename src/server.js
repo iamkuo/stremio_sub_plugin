@@ -10,6 +10,7 @@ const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require
 const { fetchUsage } = require('./deepl');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
+const stats = require('./stats');
 const SIMPLIFIED_CHARS = require('./data/simplified-chars');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -144,10 +145,126 @@ async function handleDeeplUsage(req, res) {
 
 	try {
 		const usage = await fetchUsage(cfg.deeplKey);
-		sendJson(res, 200, { ok: true, ...usage });
+		stats.setUsage(usage);
+		sendJson(res, 200, { ok: true, ...usage, alert: stats.snapshot().alert });
 	} catch (error) {
+		stats.setUsageError(error.message);
 		sendJson(res, 200, { ok: false, error: error.message });
 	}
+}
+
+/* ------------------------------------------------------------------ *
+ * DeepL usage dashboard
+ *
+ * The page never polls: it registers a watch, then receives server-sent
+ * snapshots whenever a metric changes. Account usage is only refreshed while
+ * somebody is actually watching, so no background traffic is generated.
+ * ------------------------------------------------------------------ */
+
+const STREAM_KEEPALIVE = 20000;
+/** Coalesces bursts (a player can request several subtitles at once). */
+const STREAM_PUSH_DELAY = 400;
+
+function statsPayload() {
+	return { ok: true, error: null, ...stats.snapshot() };
+}
+
+/** Refreshes the authoritative DeepL account usage if the cached copy is old. */
+async function refreshUsageIfStale(deeplKey) {
+	// Without a key there is no account to read; the dashboard still shows the
+	// cache and translation counters.
+	if (!deeplKey || stats.usageIsFresh()) return;
+	try {
+		const usage = await fetchUsage(deeplKey);
+		stats.setUsage(usage);
+		const { alert } = stats.snapshot();
+		if (alert.level === 'warn' || alert.level === 'critical') {
+			console.warn(`[stats] ${alert.message}`);
+		}
+	} catch (error) {
+		stats.setUsageError(error.message);
+	}
+}
+
+async function readSettings(req) {
+	const payload = JSON.parse((await readBody(req)) || '{}');
+	return normalizeConfig(payload.settings || payload || {});
+}
+
+/** POST /api/stats/watch – registers a short-lived, key-free stream handle. */
+async function handleStatsWatch(req, res) {
+	let cfg;
+	try {
+		cfg = await readSettings(req);
+	} catch {
+		return sendJson(res, 400, { error: 'invalid JSON body' });
+	}
+
+	// The key is optional: Google Translate needs none, and the cache counters
+	// are worth watching on their own.
+	sendJson(res, 200, { ok: true, id: stats.createWatch({ deeplKey: cfg.deeplKey || '' }) });
+}
+
+/** POST /api/stats/once – one-shot snapshot, used when streaming is unavailable. */
+async function handleStatsOnce(req, res) {
+	let cfg;
+	try {
+		cfg = await readSettings(req);
+	} catch {
+		return sendJson(res, 400, { error: 'invalid JSON body' });
+	}
+
+	await refreshUsageIfStale(cfg.deeplKey);
+	sendJson(res, 200, statsPayload());
+}
+
+/** GET /api/stats/stream?id=… – server-sent snapshot stream. */
+function handleStatsStream(req, res, url) {
+	const watch = stats.getWatch(url.searchParams.get('id'));
+	if (!watch) return sendJson(res, 404, { ok: false, error: 'unknown watch' });
+
+	res.writeHead(200, {
+		'Content-Type': 'text/event-stream; charset=utf-8',
+		'Cache-Control': 'no-cache, no-transform',
+		Connection: 'keep-alive',
+		// Ask intermediary proxies not to buffer the stream.
+		'X-Accel-Buffering': 'no',
+	});
+	res.write(': open\n\n');
+
+	let pushTimer = null;
+	let closed = false;
+
+	const push = () => {
+		if (closed) return;
+		res.write(`data: ${JSON.stringify(statsPayload())}\n\n`);
+	};
+	const schedulePush = () => {
+		if (closed || pushTimer) return;
+		pushTimer = setTimeout(() => {
+			pushTimer = null;
+			push();
+		}, STREAM_PUSH_DELAY);
+	};
+
+	push();
+	const unsubscribe = stats.subscribe(schedulePush);
+	const keepalive = setInterval(() => {
+		if (!closed) res.write(': keepalive\n\n');
+	}, STREAM_KEEPALIVE);
+
+	const close = () => {
+		if (closed) return;
+		closed = true;
+		clearInterval(keepalive);
+		if (pushTimer) clearTimeout(pushTimer);
+		unsubscribe();
+		res.end();
+	};
+	req.on('close', close);
+	res.on('close', close);
+
+	refreshUsageIfStale(watch.settings.deeplKey).catch(() => {});
 }
 
 const server = http.createServer(async (req, res) => {
@@ -172,6 +289,17 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'deepl-usage') {
 			return handleDeeplUsage(req, res);
+		}
+		if (segments[0] === 'api' && segments[1] === 'stats') {
+			if (req.method === 'GET' && segments[2] === 'stream') {
+				return handleStatsStream(req, res, url);
+			}
+			if (req.method === 'POST' && segments[2] === 'watch') {
+				return handleStatsWatch(req, res);
+			}
+			if (req.method === 'POST' && segments[2] === 'once') {
+				return handleStatsOnce(req, res);
+			}
 		}
 		if (segments[0] === 'health') {
 			return sendJson(res, 200, { status: 'ok', manifest: `${baseUrl}/manifest.json` });

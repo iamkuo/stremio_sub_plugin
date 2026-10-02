@@ -4,6 +4,7 @@ const { decodeConfig } = require('./config');
 const { outputLang } = require('./opencc');
 const { listSubtitles, normalizeLang, langAllowed, langList } = require('./sources');
 const { encodeToken } = require('./token');
+const { PROVIDERS, providerChain } = require('./translate');
 
 /**
  * Stremio `subtitles` resource handler.
@@ -12,9 +13,10 @@ const { encodeToken } = require('./token');
  * file is never sent to the player directly.
  *
  * When the video has no Chinese subtitle at all, the configured fallback
- * languages (English by default) are machine translated with DeepL instead —
- * but only if the viewer supplied their own DeepL key. Translation happens on
- * download, not here, so quota is spent only on the subtitle actually picked.
+ * languages (English by default) are machine translated instead, by the first
+ * provider in the chain that works (Google Translate, then DeepL). Translation
+ * happens on download, not here, so quota is spent only on the subtitle the
+ * viewer actually picks.
  *
  * Sources routinely list the same file several times, and a popular film can
  * carry dozens of releases. Stremio's picker shows one row per entry, so
@@ -23,6 +25,7 @@ const { encodeToken } = require('./token');
  */
 
 const MAX_CONVERTED_ENTRIES = 5;
+/** Hard upper bound; the viewer picks the actual length with `fallbackLimit`. */
 const MAX_FALLBACK_ENTRIES = 5;
 const RELEASE_LABEL_LIMIT = 30;
 
@@ -97,7 +100,7 @@ function fallbackCandidates(cfg, items) {
 
 	return ranked
 		.sort((a, b) => a.rank - b.rank || a.index - b.index)
-		.slice(0, MAX_FALLBACK_ENTRIES)
+		.slice(0, Math.min(Math.max(1, Number(cfg.fallbackLimit) || 1), MAX_FALLBACK_ENTRIES))
 		.map((entry) => entry.item);
 }
 
@@ -124,7 +127,11 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 	const subtitles = [];
 
 	const chinese = dedupe(items.filter((item) => langAllowed(cfg, item.lang))).slice(0, MAX_CONVERTED_ENTRIES);
-	const translatable = chinese.length || !cfg.deeplKey ? [] : fallbackCandidates(cfg, dedupe(items));
+	const chain = providerChain(cfg);
+	const translatable = chinese.length || !chain.length ? [] : fallbackCandidates(cfg, dedupe(items));
+	// The label names the provider that will normally serve the entry; a failed
+	// provider silently hands over to the next one in the chain.
+	const fallbackLabel = `繁體中文（${PROVIDERS[chain[0]] ? PROVIDERS[chain[0]].shortName : '機翻'}）`;
 
 	for (const item of chinese) {
 		subtitles.push({
@@ -155,7 +162,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 				s: normalizeLang(item.lang),
 			})}.srt`,
 			lang,
-			label: composeLabel('繁體中文（DeepL）', item.name),
+			label: composeLabel(fallbackLabel, item.name),
 		});
 	}
 

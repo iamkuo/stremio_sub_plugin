@@ -1,7 +1,7 @@
 {
   "name": "opencc-stremio-subtitles",
   "version": "1.0.0",
-  "description": "Stremio addon that converts Simplified Chinese subtitles to Traditional Chinese with OpenCC (s2t / s2tw / s2twp / s2hk / s2hkp), with an optional DeepL fallback that translates non-Chinese subtitles when no Chinese subtitle exists.",
+  "description": "Stremio addon that converts Simplified Chinese subtitles to Traditional Chinese with OpenCC (s2t / s2tw / s2twp / s2hk / s2hkp), with a Google Translate fallback (DeepL as a second layer) and a live usage dashboard.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

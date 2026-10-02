@@ -84,6 +84,17 @@ const DEEPL_TARGETS = {
 	jp: 'JA',
 };
 
+/** OpenCC target locale -> Google `tl` code. Google has no `zh-HK`. */
+const GOOGLE_TARGETS = {
+	cn: 'zh-CN',
+	t: 'zh-TW',
+	tw: 'zh-TW',
+	twp: 'zh-TW',
+	hk: 'zh-TW',
+	hkp: 'zh-TW',
+	jp: 'ja',
+};
+
 /** Stremio language code -> OpenSubtitles.com REST `languages` code. */
 const REST_CODES = {
 	eng: 'en', en: 'en',
@@ -140,11 +151,29 @@ function toRestCode(lang) {
 	return lookup(REST_CODES, lang);
 }
 
+/**
+ * Google source language for a Stremio code. Google uses lower-case codes and
+ * has no Cantonese, so those fall back to automatic detection.
+ */
+function toGoogleSource(lang) {
+	const code = lookup(DEEPL_SOURCES, lang);
+	if (!code || code === 'YUE') return null;
+	return code.toLowerCase();
+}
+
+/** Google target language for an OpenCC locale. */
+function toGoogleTarget(locale) {
+	return GOOGLE_TARGETS[locale] || 'zh-TW';
+}
+
 module.exports = {
 	normalizeLang,
 	toDeepLSource,
 	toDeepLTarget,
+	toGoogleSource,
+	toGoogleTarget,
 	toRestCode,
 	DEEPL_SOURCES,
+	GOOGLE_TARGETS,
 	REST_CODES,
 };

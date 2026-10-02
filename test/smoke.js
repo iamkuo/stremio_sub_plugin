@@ -17,11 +17,13 @@ const PORT = Number(process.env.PORT || 7099);
 const MOCK_PORT = PORT + 1;
 const FILE_PORT = MOCK_PORT + 1;
 const DEEPL_PORT = PORT + 3;
+const GOOGLE_PORT = PORT + 4;
 const DEEPL_KEY = 'test-key:fx';
 
 process.env.PORT = String(PORT);
 process.env.BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.DEEPL_API_URL = `http://127.0.0.1:${DEEPL_PORT}`;
+process.env.GOOGLE_API_URL = `http://127.0.0.1:${GOOGLE_PORT}`;
 
 const SIMPLIFIED_SRT = [
 	'1',
@@ -77,6 +79,14 @@ const MOCK_IDS = {
 		repeat: 4,
 		variants: 12,
 	},
+	// Many English releases: exercises the configurable fallback list length.
+	tt7777777: {
+		body: ENGLISH_SRT,
+		encoding: 'utf8',
+		contentType: 'application/x-subrip; charset=utf-8',
+		lang: 'eng',
+		variants: 12,
+	},
 };
 
 /** A minimal OpenSubtitles-v3-compatible subtitle source. */
@@ -128,6 +138,9 @@ const mockFiles = http.createServer((req, res) => {
 /** Records every translate request so the test can assert on batching. */
 const deeplCalls = [];
 
+/** Mutable so the alert thresholds can be exercised. */
+const deeplUsageState = { character_count: 1234, character_limit: 500000 };
+
 const mockDeepl = http.createServer((req, res) => {
 	if ((req.headers.authorization || '') !== `DeepL-Auth-Key ${DEEPL_KEY}`) {
 		res.writeHead(403, { 'Content-Type': 'application/json' });
@@ -137,7 +150,7 @@ const mockDeepl = http.createServer((req, res) => {
 
 	if (req.url === '/v2/usage') {
 		res.writeHead(200, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({ character_count: 1234, character_limit: 500000 }));
+		res.end(JSON.stringify(deeplUsageState));
 		return;
 	}
 
@@ -162,12 +175,46 @@ const mockDeepl = http.createServer((req, res) => {
 	res.end();
 });
 
+/** Records every Google request so the test can assert on batching. */
+const googleCalls = [];
+/** Set above 0 to make the mock Google endpoint fail, like rate limiting does. */
+let googleFailuresLeft = 0;
+
+const mockGoogle = http.createServer((req, res) => {
+	const url = new URL(req.url, 'http://localhost');
+	if (url.pathname !== '/translate_a/t') {
+		res.writeHead(404);
+		res.end();
+		return;
+	}
+	if (googleFailuresLeft > 0) {
+		googleFailuresLeft -= 1;
+		// The real host answers rate limiting with an HTML page, not JSON.
+		res.writeHead(429, { 'Content-Type': 'text/html; charset=utf-8' });
+		res.end('<html><title>Sorry...</title></html>');
+		return;
+	}
+
+	const texts = url.searchParams.getAll('q');
+	googleCalls.push({ texts, sl: url.searchParams.get('sl'), tl: url.searchParams.get('tl') });
+	const translations = texts.map((text) =>
+		text.replace(/Hello/gi, '你好').replace(/World/gi, '世界').replace(/Line (\d+)/gi, '第 $1 行')
+	);
+	res.writeHead(200, { 'Content-Type': 'application/json' });
+	res.end(JSON.stringify(translations));
+});
+
 require('../src/server');
 
 const { encodeConfig, decodeConfig } = require('../src/config');
 const { convertSubtitle, looksSimplified } = require('../src/opencc');
-const { batchTexts, splitSegments, apiHost } = require('../src/deepl');
-const { toDeepLSource, toDeepLTarget } = require('../src/langs');
+const { batchTexts, apiHost } = require('../src/deepl');
+const { splitSegments } = require('../src/srt');
+const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/google');
+const { providerChain, hasProvider } = require('../src/translate');
+const { clampFallbackLimit, MAX_FALLBACK_LIMIT } = require('../src/config');
+const stats = require('../src/stats');
+const { toDeepLSource, toDeepLTarget, toGoogleSource, toGoogleTarget } = require('../src/langs');
 	const { composeLabel, releaseLabel, disambiguateLabels, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
 
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -283,6 +330,31 @@ function unitTests() {
 	// Equal labels are numbered so no two rows look the same.
 	const rows = disambiguateLabels([{ label: '繁體中文 · 1080p' }, { label: '繁體中文 · 1080p' }, { label: 'x' }]);
 	assert.deepStrictEqual(rows.map((row) => row.label), ['繁體中文 · 1080p', '繁體中文 · 1080p (2)', 'x']);
+
+	// Language mapping for the second provider.
+	assert.strictEqual(toGoogleSource('eng'), 'en');
+	assert.strictEqual(toGoogleSource('jpn'), 'ja');
+	assert.strictEqual(toGoogleSource('yue'), null, 'Google has no Cantonese');
+	assert.strictEqual(toGoogleTarget('twp'), 'zh-TW');
+	assert.strictEqual(toGoogleTarget('cn'), 'zh-CN');
+
+	// Google batching and response parsing.
+	assert.strictEqual(googleBatchTexts(Array.from({ length: 120 }, () => 'x')).length, 3);
+	assert.deepStrictEqual(parseTranslations(['a', 'b']), ['a', 'b']);
+	assert.deepStrictEqual(parseTranslations([['a', 'fr']]), ['a'], 'sl=auto answers with pairs');
+
+	// The provider chain: Google first, DeepL only when a key exists.
+	assert.deepStrictEqual(providerChain({ fallbackProvider: 'auto' }), ['google']);
+	assert.deepStrictEqual(providerChain({ fallbackProvider: 'auto', deeplKey: 'k' }), ['google', 'deepl']);
+	assert.deepStrictEqual(providerChain({ fallbackProvider: 'deepl', deeplKey: 'k' }), ['deepl']);
+	assert.deepStrictEqual(providerChain({ fallbackProvider: 'deepl' }), []);
+	assert.strictEqual(hasProvider({ fallbackProvider: 'auto' }), true);
+
+	// The fallback list length is clamped to a sane range.
+	assert.strictEqual(clampFallbackLimit(undefined), 1);
+	assert.strictEqual(clampFallbackLimit(3), 3);
+	assert.strictEqual(clampFallbackLimit(0), 1);
+	assert.strictEqual(clampFallbackLimit(99), MAX_FALLBACK_LIMIT);
 	console.log('unit      ok');
 }
 
@@ -305,7 +377,9 @@ async function httpTests() {
 	const page = await get(`/${CFG}/configure`);
 	assert.strictEqual(page.status, 200);
 	assert.ok(page.body.includes('OpenCC 轉換設定'));
-	assert.ok(page.body.includes('DeepL 備援翻譯'), 'the config page must expose the DeepL settings');
+	assert.ok(page.body.includes('備援翻譯'), 'the config page must expose the fallback settings');
+	assert.ok(page.body.includes('fallbackProvider'), 'the provider selector must be present');
+	assert.ok(page.body.includes('DeepL 用量監控'), 'the usage dashboard must be present');
 	assert.ok(!page.body.includes('__SETTINGS__'), 'settings must be injected into the page');
 
 	const configApi = await post('/api/config', { from: 'cn', to: 'twp', customDict: '軟件=軟體' });
@@ -379,6 +453,7 @@ async function deeplTests() {
 		to: 'twp',
 		deeplKey: DEEPL_KEY,
 		fallbackLangs: 'eng',
+		fallbackProvider: 'deepl',
 	});
 
 	// No Chinese subtitle exists -> the fallback is offered.
@@ -400,7 +475,13 @@ async function deeplTests() {
 	assert.ok(withChinese.json.subtitles.every((sub) => sub.id.startsWith('opencc')));
 
 	// No key -> no fallback entries.
-	const withoutKey = encodeConfig({ provider: 'v3', sourceUrl: SOURCE_URL, fallbackLangs: 'eng' });
+	// Forcing DeepL without a key leaves nothing to translate with.
+	const withoutKey = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		fallbackLangs: 'eng',
+		fallbackProvider: 'deepl',
+	});
 	assert.deepStrictEqual((await getJson(`/${withoutKey}/subtitles/movie/tt4444444.json`)).json, { subtitles: [] });
 
 	// Empty fallback list -> no fallback entries either.
@@ -418,7 +499,13 @@ async function deeplTests() {
 	assert.strictEqual(deeplCalls.reduce((total, call) => total + call.text.length, 0), 120);
 
 	// A rejected key produces a readable error instead of a broken subtitle.
-	const badKey = encodeConfig({ provider: 'v3', sourceUrl: SOURCE_URL, deeplKey: 'not-a-key', fallbackLangs: 'eng' });
+	const badKey = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		deeplKey: 'not-a-key',
+		fallbackLangs: 'eng',
+		fallbackProvider: 'deepl',
+	});
 	const bad = await fetchFirstSubtitle(badKey, 'tt4444444');
 	assert.strictEqual(bad.status, 402);
 	assert.ok(bad.body.includes('DeepL'), 'the error must name DeepL so the cause is obvious');
@@ -436,6 +523,176 @@ async function deeplTests() {
 	const noKeyUsage = await post('/api/deepl-usage', { settings: {} });
 	assert.strictEqual(noKeyUsage.json.ok, false);
 	console.log('deepl     ok');
+}
+
+async function googleFallbackTests() {
+	// Google needs no key, so the fallback works with nothing configured.
+	const auto = encodeConfig({ provider: 'v3', sourceUrl: SOURCE_URL, to: 'twp', fallbackLangs: 'eng' });
+	const list = await getJson(`/${auto}/subtitles/movie/tt4444444.json`);
+	assert.strictEqual(list.json.subtitles.length, 1);
+	assert.ok(list.json.subtitles[0].label.startsWith('繁體中文（Google）'), 'Google must be the first fallback');
+
+	const translated = await get(new URL(list.json.subtitles[0].url).pathname);
+	assert.strictEqual(translated.status, 200);
+	assert.ok(translated.body.includes('你好 世界'), 'the Google fallback must be translated');
+	assert.ok(translated.body.includes('00:00:01,000 --> 00:00:03,000'), 'timing lines must survive translation');
+
+	const call = googleCalls[googleCalls.length - 1];
+	assert.strictEqual(call.tl, 'zh-TW', 'Traditional Chinese target');
+	assert.strictEqual(call.sl, 'en', 'the source language must be mapped, not auto-detected');
+	assert.strictEqual(call.texts.length, 2, 'one request may carry several cues');
+
+	// A long subtitle is split into requests the endpoint accepts.
+	googleCalls.length = 0;
+	const long = await fetchFirstSubtitle(auto, 'tt5555555');
+	assert.ok(long.body.includes('第 120 行'), 'every cue must be translated');
+	assert.ok(googleCalls.every((entry) => entry.texts.length <= 50));
+	assert.strictEqual(googleCalls.reduce((total, entry) => total + entry.texts.length, 0), 120);
+
+	// `google` preference never touches DeepL.
+	deeplCalls.length = 0;
+	const googleOnly = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		to: 'twp',
+		fallbackLangs: 'eng',
+		fallbackProvider: 'google',
+		deeplKey: DEEPL_KEY,
+	});
+	await fetchFirstSubtitle(googleOnly, 'tt4444444');
+	assert.strictEqual(deeplCalls.length, 0, 'the google preference must not call DeepL');
+
+	// When Google fails, `auto` hands the subtitle to DeepL.
+	deeplCalls.length = 0;
+	googleFailuresLeft = 2; // both attempts of the only configured host
+	const chained = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		to: 'twp',
+		fallbackLangs: 'eng',
+		deeplKey: DEEPL_KEY,
+	});
+	const chainedList = await getJson(`/${chained}/subtitles/movie/tt4444444.json`);
+	assert.ok(chainedList.json.subtitles[0].label.startsWith('繁體中文（Google）'));
+	const chainedFile = await get(new URL(chainedList.json.subtitles[0].url).pathname);
+	assert.strictEqual(chainedFile.status, 200);
+	assert.ok(chainedFile.body.includes('你好 世界'), 'DeepL must have served the subtitle');
+	assert.ok(deeplCalls.length > 0, 'the chain must have reached DeepL');
+
+	// Forcing DeepL without a key leaves nothing to translate with.
+	const deeplNoKey = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		fallbackLangs: 'eng',
+		fallbackProvider: 'deepl',
+	});
+	assert.deepStrictEqual((await getJson(`/${deeplNoKey}/subtitles/movie/tt4444444.json`)).json, { subtitles: [] });
+
+	// The fallback list length is configurable and defaults to a single entry.
+	const single = await getJson(`/${auto}/subtitles/movie/tt7777777.json`);
+	assert.strictEqual(single.json.subtitles.length, 1, 'only one fallback entry by default');
+
+	const triple = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		to: 'twp',
+		fallbackLangs: 'eng',
+		fallbackLimit: 3,
+	});
+	assert.strictEqual((await getJson(`/${triple}/subtitles/movie/tt7777777.json`)).json.subtitles.length, 3);
+
+	const capped = encodeConfig({
+		provider: 'v3',
+		sourceUrl: SOURCE_URL,
+		to: 'twp',
+		fallbackLangs: 'eng',
+		fallbackLimit: 99,
+	});
+	assert.strictEqual(
+		(await getJson(`/${capped}/subtitles/movie/tt7777777.json`)).json.subtitles.length,
+		5,
+		'the limit must be capped'
+	);
+	console.log('google    ok');
+}
+
+/** Reads server-sent snapshots from the dashboard stream. */
+async function readStream(url, expected, onFirst) {
+	const controller = new AbortController();
+	const response = await fetch(url, { signal: controller.signal });
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	const payloads = [];
+	let buffer = '';
+	const deadline = Date.now() + 20000;
+
+	try {
+		while (payloads.length < expected && Date.now() < deadline) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+
+			let index;
+			while ((index = buffer.indexOf('\n\n')) !== -1) {
+				const frame = buffer.slice(0, index);
+				buffer = buffer.slice(index + 2);
+				const line = frame.split('\n').find((entry) => entry.startsWith('data: '));
+				if (!line) continue;
+				payloads.push(JSON.parse(line.slice(6)));
+				if (payloads.length === 1 && onFirst) await onFirst();
+			}
+		}
+	} finally {
+		controller.abort();
+	}
+
+	return payloads;
+}
+
+async function statsTests() {
+	const watch = await post('/api/stats/watch', { settings: {} });
+	assert.strictEqual(watch.json.ok, true);
+	assert.ok(watch.json.id, 'a key-free watch must be possible');
+
+	assert.strictEqual((await getJson('/api/stats/stream?id=bogus')).status, 404);
+
+	const once = await post('/api/stats/once', { settings: {} });
+	assert.strictEqual(once.json.ok, true);
+	assert.ok(once.json.cache && once.json.translation, 'the snapshot must carry both metric groups');
+
+	// A change pushes a fresh snapshot without the page asking for one.
+	const streamUrl = `${BASE}/api/stats/stream?id=${watch.json.id}`;
+	const payloads = await readStream(streamUrl, 2, async () => {
+		await fetchFirstSubtitle(CFG, 'tt2222222');
+	});
+	assert.ok(payloads.length >= 2, 'the stream must push on activity');
+	const latest = payloads[payloads.length - 1];
+	assert.strictEqual(latest.ok, true);
+	assert.ok(latest.cache.hits + latest.cache.misses > 0, 'cache activity must be counted');
+	assert.ok(typeof latest.cache.hitRate === 'number' || latest.cache.hitRate === null);
+
+	// Usage plus the alert thresholds.
+	stats.reset();
+	deeplUsageState.character_count = 1234;
+	const normal = await post('/api/stats/once', { settings: { deeplKey: DEEPL_KEY } });
+	assert.strictEqual(normal.json.usage.percent, 0);
+	assert.strictEqual(normal.json.alert.level, 'ok');
+	assert.strictEqual(normal.json.usage.remaining, 498766);
+
+	stats.reset();
+	deeplUsageState.character_count = 430000; // 86%
+	const warn = await post('/api/stats/once', { settings: { deeplKey: DEEPL_KEY } });
+	assert.strictEqual(warn.json.alert.level, 'warn');
+	assert.ok(warn.json.alert.message.includes('86%'));
+
+	stats.reset();
+	deeplUsageState.character_count = 495000; // 99%
+	const critical = await post('/api/stats/once', { settings: { deeplKey: DEEPL_KEY } });
+	assert.strictEqual(critical.json.alert.level, 'critical');
+	assert.ok(critical.json.translation.estimatedRemainingSubtitles !== null);
+
+	deeplUsageState.character_count = 1234;
+	console.log('stats     ok');
 }
 
 async function liveTest() {
@@ -458,11 +715,14 @@ async function main() {
 	await new Promise((resolve) => mockSource.listen(MOCK_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockFiles.listen(FILE_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockDeepl.listen(DEEPL_PORT, '127.0.0.1', resolve));
+	await new Promise((resolve) => mockGoogle.listen(GOOGLE_PORT, '127.0.0.1', resolve));
 
 	unitTests();
 	await httpTests();
 	await conversionTests();
 	await deeplTests();
+	await googleFallbackTests();
+	await statsTests();
 	await liveTest();
 
 	console.log('\nAll checks passed.');

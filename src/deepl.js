@@ -13,6 +13,8 @@
  * directly against DeepL. Nothing is stored server side.
  */
 
+const { splitSegments, translateSubtitleText, mapWithConcurrency } = require('./srt');
+
 const FREE_HOST = 'https://api-free.deepl.com';
 const PRO_HOST = 'https://api.deepl.com';
 
@@ -20,9 +22,8 @@ const PRO_HOST = 'https://api.deepl.com';
 const MAX_TEXTS_PER_REQUEST = 50;
 const MAX_BYTES_PER_REQUEST = 60 * 1024;
 const REQUEST_TIMEOUT = 60000;
-
-const INDEX_LINE = /^\s*\d+\s*$/;
-const TIMING_LINE = /^\s*\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}\s*-->/;
+/** DeepL explicitly allows parallel requests; four keeps latency down. */
+const MAX_CONCURRENT_REQUESTS = 4;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -113,9 +114,9 @@ function batchTexts(texts) {
  * @returns {Promise<string[]>}
  */
 async function translateTexts(apiKey, texts, { sourceLang, targetLang }) {
-	const results = [];
+	const batches = batchTexts(texts);
 
-	for (const batch of batchTexts(texts)) {
+	const results = await mapWithConcurrency(batches, MAX_CONCURRENT_REQUESTS, async (batch) => {
 		const params = { text: batch, target_lang: targetLang };
 		if (sourceLang) params.source_lang = sourceLang;
 
@@ -131,66 +132,22 @@ async function translateTexts(apiKey, texts, { sourceLang, targetLang }) {
 		if (translated.length !== batch.length) {
 			throw new Error('DeepL 回傳的翻譯數量與請求不符');
 		}
-		results.push(...translated);
-	}
-
-	return results;
-}
-
-/**
- * Finds the translatable text of a subtitle. Consecutive non-empty lines that
- * are neither cue numbers nor timing lines form one segment (normally exactly
- * one cue), so each segment is translated with its own context.
- */
-function splitSegments(text) {
-	const lines = text.split(/\r?\n/);
-	const segments = [];
-	let current = null;
-
-	lines.forEach((line, index) => {
-		if (!line.trim() || INDEX_LINE.test(line) || TIMING_LINE.test(line)) {
-			current = null;
-			return;
-		}
-		if (current) current.end = index;
-		else {
-			current = { start: index, end: index };
-			segments.push(current);
-		}
+		return translated;
 	});
 
-	return { lines, segments };
+	return results.flat();
 }
 
 /**
  * Translates a whole SRT/VTT file, leaving cue numbers and timing lines alone.
  *
- * @returns {{ text: string, translatedSegments: number, totalSegments: number, characters: number }}
+ * @returns {{ text: string, characters: number, requests: number, segments: number }}
  */
 async function translateSubtitle(text, { apiKey, sourceLang, targetLang }) {
-	const { lines, segments } = splitSegments(text);
-	if (!segments.length) {
-		return { text, translatedSegments: 0, totalSegments: 0, characters: 0 };
-	}
-
-	const sources = segments.map((segment) => lines.slice(segment.start, segment.end + 1).join('\n'));
-	const translations = await translateTexts(apiKey, sources, { sourceLang, targetLang });
-
-	const output = [];
-	let cursor = 0;
-	segments.forEach((segment, index) => {
-		while (cursor < segment.start) output.push(lines[cursor++]);
-		output.push(...String(translations[index] ?? '').split('\n'));
-		cursor = segment.end + 1;
-	});
-	while (cursor < lines.length) output.push(lines[cursor++]);
-
-	return {
-		text: output.join(text.includes('\r\n') ? '\r\n' : '\n'),
-		translatedSegments: segments.length,
-		totalSegments: segments.length,
-		characters: sources.reduce((total, source) => total + source.length, 0),
-	};
+	return translateSubtitleText(text, async (sources) => ({
+		texts: await translateTexts(apiKey, sources, { sourceLang, targetLang }),
+		requests: batchTexts(sources).length,
+	}));
 }
 
 /** Reads the account's character usage, used by the config page's key check. */
@@ -221,4 +178,5 @@ module.exports = {
 	apiHost,
 	describeStatus,
 	MAX_TEXTS_PER_REQUEST,
+	MAX_CONCURRENT_REQUESTS,
 };

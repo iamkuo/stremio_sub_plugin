@@ -77,6 +77,17 @@
 	}
 	.badge.ok { color: var(--ok); border-color: #245c45; }
 	.badge.warn { color: var(--warn); border-color: #5c4a1d; }
+	.meter { height: 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+	.meter-fill { height: 100%; width: 0; background: var(--ok); transition: width .35s ease, background .35s ease; }
+	.meter-fill.warn { background: var(--warn); }
+	.meter-fill.critical { background: #e5534b; }
+	.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 10px; margin-top: 14px; }
+	.stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
+	.stat b { display: block; font-size: 17px; font-weight: 600; }
+	.stat span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+	.alert { margin-top: 14px; border-radius: 9px; padding: 10px 12px; font-size: 13.5px; border: 1px solid var(--line); }
+	.alert.warn { color: var(--warn); border-color: #5c4a1d; background: rgba(240,180,41,.07); }
+	.alert.critical { color: #ff8b83; border-color: #6b2b27; background: rgba(229,83,75,.09); }
 	pre.output {
 		background: var(--panel-2);
 		border: 1px solid var(--line);
@@ -198,24 +209,60 @@
 	</div>
 
 	<div class="card">
-		<h2>DeepL 備援翻譯（選填）</h2>
+		<h2>備援翻譯</h2>
 		<p class="hint" style="margin-top:-6px">
-			當影片<strong>完全找不到中文（或簡體）字幕</strong>時，改用 DeepL 翻譯下面列出的語言。需要你自己的 DeepL API Key；
-			翻譯只在你實際選擇該字幕時才會發生，所以瀏覽字幕清單不會浪費額度。
+			當影片<strong>完全找不到中文（或簡體）字幕</strong>時，改把下面列出的語言機器翻譯成繁體中文。
+			翻譯只在你實際選擇該字幕時才會發生，所以瀏覽字幕清單不會浪費任何額度。
 		</p>
 		<div class="field">
+			<label for="fallbackProvider">翻譯服務</label>
+			<select id="fallbackProvider">
+				<option value="auto">Google 翻譯（第一備援），失敗時改用 DeepL</option>
+				<option value="google">只用 Google 翻譯（免金鑰）</option>
+				<option value="deepl">只用 DeepL（需 API Key）</option>
+			</select>
+			<div class="hint">Google 翻譯不需要任何金鑰，開箱即可用；DeepL 品質較好但需要你自己的金鑰。</div>
+		</div>
+		<div class="field">
 			<label for="deeplKey">DeepL API Key</label>
-			<input type="password" id="deeplKey" spellcheck="false" autocomplete="off" placeholder="免費金鑰以 :fx 結尾">
+			<input type="password" id="deeplKey" spellcheck="false" autocomplete="off" placeholder="選用 DeepL 時才需要，免費金鑰以 :fx 結尾">
 			<div class="hint">金鑰只存在你自己的安裝網址中，伺服器不會儲存任何使用者資料。免費方案每月 50 萬字元。</div>
 		</div>
 		<div class="field">
-			<label for="fallbackLangs">備援語言（DeepL 翻譯來源）</label>
+			<label for="fallbackLangs">備援語言（翻譯來源）</label>
 			<input type="text" id="fallbackLangs" spellcheck="false">
-			<div class="hint">以逗號分隔，預設 <code>eng</code>。清空此欄即停用備援翻譯。</div>
+			<div class="hint">以逗號分隔，預設 <code>eng</code>。清空此欄即完全停用備援翻譯。</div>
+		</div>
+		<div class="field">
+			<label for="fallbackLimit">備援字幕數量</label>
+			<input type="number" id="fallbackLimit" min="1" max="5" step="1">
+			<div class="hint">同一部片的候選往往有數十個版本，而 Stremio 只顯示語言、無法區分，因此預設只留 1 筆。</div>
 		</div>
 		<div class="row">
 			<button class="btn secondary" id="deeplCheckBtn" type="button">檢查金鑰與額度</button>
 			<span class="badge" id="deeplBadge" hidden></span>
+		</div>
+	</div>
+
+	<div class="card">
+		<h2>DeepL 用量監控</h2>
+		<p class="hint" style="margin-top:-6px" id="dashHint">連線中…</p>
+		<div id="dashBody" hidden>
+			<div class="row" style="justify-content:space-between; margin-bottom:8px">
+				<span class="badge" id="dashUsed">—</span>
+				<span class="badge" id="dashRemaining">—</span>
+			</div>
+			<div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+			<div class="stats" id="dashStats"></div>
+			<div class="alert" id="dashAlert" hidden></div>
+		</div>
+		<div class="row" style="margin-top:14px">
+			<span class="badge" id="dashLive">未連線</span>
+			<button class="btn secondary" id="dashRefreshBtn" type="button">重新整理</button>
+		</div>
+		<div class="hint">
+			帳戶用量來自 DeepL 官方 <code>/v2/usage</code>，跨越重新部署仍然有效；
+			快取與翻譯次數是<strong>本服務啟動以來</strong>的統計，重新部署後會歸零。
 		</div>
 	</div>
 
@@ -303,6 +350,8 @@ function readForm() {
 	state.langs = el('langs').value;
 	state.deeplKey = el('deeplKey').value;
 	state.fallbackLangs = el('fallbackLangs').value;
+	state.fallbackProvider = el('fallbackProvider').value;
+	state.fallbackLimit = Number(el('fallbackLimit').value) || 1;
 }
 
 function writeForm() {
@@ -317,6 +366,8 @@ function writeForm() {
 	el('langs').value = state.langs;
 	el('deeplKey').value = state.deeplKey;
 	el('fallbackLangs').value = state.fallbackLangs;
+	el('fallbackProvider').value = state.fallbackProvider;
+	el('fallbackLimit').value = state.fallbackLimit;
 	syncProviderFields();
 }
 
@@ -382,7 +433,7 @@ function onFormChange(event) {
 	schedulePreview();
 }
 
-for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sourceUrl', 'apiKey', 'langs', 'deeplKey', 'fallbackLangs']) {
+for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sourceUrl', 'apiKey', 'langs', 'deeplKey', 'fallbackLangs', 'fallbackProvider', 'fallbackLimit']) {
 	el(id).addEventListener('input', onFormChange);
 	el(id).addEventListener('change', onFormChange);
 }
@@ -407,7 +458,181 @@ el('deeplCheckBtn').addEventListener('click', async () => {
 		badge.className = 'badge warn';
 		badge.textContent = `檢查失敗：${error.message}`;
 	}
+	// The check already refreshed the account usage server side; (re)attach the
+	// dashboard so the result is reflected there too.
+	if (!statsSource) startStats();
 });
+
+/* ------------------------------------------------------------------ *
+ * DeepL usage dashboard
+ *
+ * Updates are pushed by the server over SSE. The page never polls: if the
+ * stream cannot be established it falls back to a single snapshot plus a
+ * manual refresh button.
+ * ------------------------------------------------------------------ */
+
+let statsSource = null;
+let statsFailures = 0;
+
+function esc(value) {
+	return String(value).replace(/[&<>"']/g, (char) => (
+		{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]
+	));
+}
+
+function formatNumber(value) {
+	return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
+}
+
+function formatDuration(seconds) {
+	if (typeof seconds !== 'number') return '—';
+	const hours = Math.floor(seconds / 3600);
+	const minutes = Math.floor((seconds % 3600) / 60);
+	if (hours) return `${hours} 小時 ${minutes} 分`;
+	if (minutes) return `${minutes} 分`;
+	return `${seconds} 秒`;
+}
+
+function statTile(label, value, sub) {
+	return `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}${sub ? ` ・ ${esc(sub)}` : ''}</span></div>`;
+}
+
+function setLive(level, text) {
+	el('dashLive').className = 'badge' + (level ? ` ${level}` : '');
+	el('dashLive').textContent = text;
+}
+
+function renderStats(snapshot) {
+	if (!snapshot || snapshot.ok === false) {
+		el('dashBody').hidden = true;
+		el('dashHint').hidden = false;
+		el('dashHint').textContent = (snapshot && snapshot.error) || '無法取得用量資訊。';
+		return;
+	}
+
+	const usage = snapshot.usage;
+	const cache = snapshot.cache || {};
+	const translation = snapshot.translation || {};
+	const percent = usage ? usage.percent : 0;
+
+	el('dashHint').hidden = true;
+	el('dashBody').hidden = false;
+	el('dashUsed').textContent = usage
+		? `當月已用 ${formatNumber(usage.characterCount)} / ${formatNumber(usage.characterLimit)} 字元（${percent}%）`
+		: '尚未取得 DeepL 帳戶用量';
+	el('dashRemaining').textContent = usage ? `剩餘 ${formatNumber(usage.remaining)} 字元` : '';
+
+	const fill = el('meterFill');
+	fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+	fill.className = 'meter-fill' + (snapshot.alert && snapshot.alert.level !== 'ok' ? ` ${snapshot.alert.level}` : '');
+
+	el('dashStats').innerHTML = [
+		statTile(
+			'翻譯服務',
+			translation.lastProvider ? (translation.lastProvider === 'google' ? 'Google 翻譯' : 'DeepL') : '尚未使用',
+			Object.entries(translation.byProvider || {})
+				.map(([id, value]) => `${id === 'google' ? 'Google' : 'DeepL'} ${formatNumber(value.subtitles)} 個`)
+				.join(' ・ ') || '尚無備援翻譯紀錄'
+		),
+		statTile(
+			'預估還可翻譯',
+			usage ? `約 ${formatNumber(translation.estimatedRemainingSubtitles)} 部字幕` : '—',
+			usage ? `每部平均 ${formatNumber(translation.averageSubtitleCharacters)} 字元` : '需要 DeepL 帳戶用量'
+		),
+		statTile(
+			'快取命中率',
+			cache.hitRate === null || cache.hitRate === undefined ? '—' : `${cache.hitRate}%`,
+			`${formatNumber(cache.hits)} 次命中 / ${formatNumber(cache.misses)} 次未命中`
+		),
+		statTile('快取節省的字元', formatNumber(cache.charactersSaved), `目前快取 ${formatNumber(cache.entries)} 個字幕`),
+		statTile(
+			'啟動以來翻譯',
+			`${formatNumber(translation.subtitles)} 個字幕`,
+			`${formatNumber(translation.characters)} 字元 ・ ${formatNumber(translation.requests)} 次 DeepL 請求`
+		),
+		statTile('DeepL 錯誤次數', formatNumber(translation.errors), translation.lastError || '無'),
+		statTile('用量資料時間', usage ? `${usage.ageSeconds} 秒前` : '—', `服務啟動 ${formatDuration(snapshot.uptimeSeconds)}`),
+	].join('');
+
+	const alertBox = el('dashAlert');
+	if (snapshot.alert && snapshot.alert.message) {
+		alertBox.hidden = false;
+		alertBox.className = `alert ${snapshot.alert.level}`;
+		alertBox.textContent = snapshot.alert.message;
+	} else {
+		alertBox.hidden = true;
+	}
+}
+
+function stopStats() {
+	if (statsSource) {
+		statsSource.close();
+		statsSource = null;
+	}
+	statsFailures = 0;
+}
+
+function openStream(id) {
+	statsSource = new EventSource(`/api/stats/stream?id=${encodeURIComponent(id)}`);
+	statsSource.addEventListener('open', () => {
+		statsFailures = 0;
+		setLive('ok', '即時更新中');
+	});
+	statsSource.addEventListener('message', (event) => {
+		try {
+			renderStats(JSON.parse(event.data));
+		} catch {
+			/* ignore a malformed frame and keep the last good snapshot */
+		}
+	});
+	statsSource.addEventListener('error', () => {
+		statsFailures += 1;
+		if (statsFailures > 3) {
+			stopStats();
+			setLive('warn', '即時連線中斷，已改為單次查詢');
+			refreshStatsOnce();
+		} else {
+			setLive('', '重新連線中…');
+		}
+	});
+}
+
+async function refreshStatsOnce() {
+	try {
+		renderStats(await post('api/stats/once', { settings: state }));
+	} catch (error) {
+		setLive('warn', `查詢失敗：${error.message}`);
+	}
+}
+
+async function startStats() {
+	stopStats();
+	readForm();
+
+	setLive('', '連線中…');
+	try {
+		const result = await post('api/stats/watch', { settings: state });
+		if (!result.ok) {
+			el('dashBody').hidden = true;
+			el('dashHint').hidden = false;
+			el('dashHint').textContent = result.error;
+			setLive('warn', '無法監控');
+			return;
+		}
+		openStream(result.id);
+	} catch (error) {
+		setLive('warn', `無法建立監控：${error.message}`);
+	}
+}
+
+el('dashRefreshBtn').addEventListener('click', () => {
+	if (statsSource) refreshStatsOnce();
+	else startStats();
+});
+
+// `change` only fires when the field loses focus, so typing a key does not
+// tear down and rebuild the stream on every keystroke.
+el('deeplKey').addEventListener('change', startStats);
 
 el('copyBtn').addEventListener('click', async () => {
 	try {
@@ -422,6 +647,7 @@ el('copyBtn').addEventListener('click', async () => {
 writeForm();
 refreshLinks();
 refreshPreview();
+startStats();
 </script>
 </body>
 </html>
