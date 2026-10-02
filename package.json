@@ -1,0 +1,29 @@
+{
+  "name": "opencc-stremio-subtitles",
+  "version": "1.0.0",
+  "description": "Stremio addon that converts Simplified Chinese subtitles to Traditional Chinese with OpenCC (s2t / s2tw / s2twp / s2hk / s2hkp).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "build": "node tools/build.js",
+    "postinstall": "node tools/build.js",
+    "test": "node test/detect-check.js && node test/smoke.js"
+  },
+  "keywords": [
+    "stremio",
+    "stremio-addon",
+    "subtitles",
+    "opencc",
+    "traditional-chinese",
+    "simplified-chinese"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.3",
+    "opencc-js": "^1.4.2"
+  }
+}

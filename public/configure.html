@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCC 簡繁轉換字幕 — 設定</title>
+<style>
+	:root {
+		--bg: #0f1216;
+		--panel: #171c22;
+		--panel-2: #1e242c;
+		--line: #2a323c;
+		--text: #e8edf3;
+		--muted: #93a1b1;
+		--accent: #4c9aff;
+		--accent-2: #2f7ae5;
+		--ok: #3ecf8e;
+		--warn: #f0b429;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		background: var(--bg);
+		color: var(--text);
+		font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+	}
+	.wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 64px; }
+	header { margin-bottom: 28px; }
+	h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: .02em; }
+	h1 span { color: var(--accent); }
+	header p { margin: 0; color: var(--muted); font-size: 14px; }
+	.card {
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		padding: 20px;
+		margin-bottom: 16px;
+	}
+	.card h2 {
+		font-size: 13px;
+		text-transform: uppercase;
+		letter-spacing: .08em;
+		color: var(--muted);
+		margin: 0 0 16px;
+		font-weight: 600;
+	}
+	.field { margin-bottom: 16px; }
+	.field:last-child { margin-bottom: 0; }
+	label { display: block; font-size: 14px; margin-bottom: 6px; font-weight: 500; }
+	.hint { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+	@media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+	select, input[type=text], input[type=password], textarea {
+		width: 100%;
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		color: var(--text);
+		border-radius: 8px;
+		padding: 9px 11px;
+		font: inherit;
+		font-size: 14px;
+	}
+	textarea { resize: vertical; min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+	select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+	.check { display: flex; gap: 10px; align-items: flex-start; }
+	.check input { margin-top: 4px; accent-color: var(--accent); }
+	.check label { margin: 0; font-weight: 400; }
+	details summary { cursor: pointer; color: var(--muted); font-size: 13.5px; margin-bottom: 10px; }
+	.badge {
+		display: inline-block;
+		font-size: 12px;
+		padding: 2px 9px;
+		border-radius: 999px;
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		color: var(--muted);
+	}
+	.badge.ok { color: var(--ok); border-color: #245c45; }
+	.badge.warn { color: var(--warn); border-color: #5c4a1d; }
+	pre.output {
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 12px;
+		margin: 0;
+		white-space: pre-wrap;
+		word-break: break-word;
+		min-height: 90px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 13px;
+	}
+	.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		background: var(--accent);
+		color: #fff;
+		text-decoration: none;
+		border: 0;
+		border-radius: 9px;
+		padding: 11px 18px;
+		font: inherit;
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.btn:hover { background: var(--accent-2); }
+	.btn.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+	.btn.secondary:hover { border-color: var(--accent); }
+	.url {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		margin-top: 14px;
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 8px 10px;
+	}
+	.url code {
+		flex: 1;
+		overflow-x: auto;
+		white-space: nowrap;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 12.5px;
+		color: var(--muted);
+	}
+	footer { color: var(--muted); font-size: 12.5px; margin-top: 28px; text-align: center; }
+	footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+	<header>
+		<h1>OpenCC <span>簡繁轉換</span>字幕</h1>
+		<p>將 OpenSubtitles 的簡體中文字幕，在播放時即時轉換成繁體中文。所有 OpenCC 轉換選項皆可於此設定。</p>
+	</header>
+
+	<div class="card">
+		<h2>OpenCC 轉換設定</h2>
+		<div class="grid">
+			<div class="field">
+				<label for="from">來源語言</label>
+				<select id="from"></select>
+			</div>
+			<div class="field">
+				<label for="to">目標語言</label>
+				<select id="to"></select>
+			</div>
+		</div>
+		<div class="field">
+			<label for="mode">轉換時機</label>
+			<select id="mode">
+				<option value="auto">自動偵測（僅轉換含簡體字的字幕，建議）</option>
+				<option value="always">一律轉換</option>
+			</select>
+			<div class="hint">「自動偵測」會比對 OpenCC 簡體字表，已繁體化的字幕原樣輸出，避免不必要的改動。</div>
+		</div>
+		<div class="field">
+			<div class="check">
+				<input type="checkbox" id="keepOriginal">
+				<label for="keepOriginal">同時保留原始字幕（在 Stremio 字幕清單中額外提供未轉換的版本）</label>
+			</div>
+		</div>
+		<div class="field">
+			<details>
+				<summary>自訂詞彙對照表（選填）</summary>
+				<textarea id="customDict" spellcheck="false" placeholder="一行一組，例如：&#10;軟件=軟體&#10;視頻=影片&#10;自行車=腳踏車"></textarea>
+				<div class="hint">在 OpenCC 標準轉換之後套用，可覆寫任何結果。支援 <code>=</code>、<code>,</code>、<code>，</code>、Tab 分隔，<code>#</code> 開頭為註解。</div>
+			</details>
+		</div>
+	</div>
+
+	<div class="card">
+		<h2>字幕來源</h2>
+		<div class="field">
+			<label for="provider">來源</label>
+			<select id="provider">
+				<option value="v3">OpenSubtitles v3（免 API Key，推薦）</option>
+				<option value="rest">OpenSubtitles.com REST API（需 API Key，中文片源較多）</option>
+			</select>
+		</div>
+		<div class="field" id="sourceUrlField">
+			<label for="sourceUrl">來源伺服器</label>
+			<input type="text" id="sourceUrl" spellcheck="false">
+			<div class="hint">任何相容 Stremio 字幕協定的伺服器皆可使用，預設為官方 OpenSubtitles v3。</div>
+		</div>
+		<div class="field" id="apiKeyField" hidden>
+			<label for="apiKey">OpenSubtitles.com API Key</label>
+			<input type="password" id="apiKey" spellcheck="false" autocomplete="off" placeholder="例如 a1b2c3d4e5f6...">
+			<div class="hint">於 opensubtitles.com 免費註冊後，在個人設定頁的 API 區段取得。免費方案每日下載次數有限。</div>
+		</div>
+		<div class="field">
+			<label for="langs">接受的字幕語言代碼</label>
+			<input type="text" id="langs" spellcheck="false">
+			<div class="hint">以逗號分隔。v3 來源的中文代碼為 <code>zht</code>，REST 來源為 <code>zh-cn</code>／<code>zh-tw</code>。</div>
+		</div>
+	</div>
+
+	<div class="card">
+		<h2>即時預覽</h2>
+		<div class="field">
+		<textarea id="sample" spellcheck="false">1
+00:01:33,440 --> 00:01:38,660
+他语无伦次，但是提到你的名字
+
+2
+00:01:40,450 --> 00:01:42,290
+把这个软件里面的视频转换一下</textarea>
+		</div>
+		<div class="row" style="margin-bottom:10px">
+			<span class="badge" id="detectBadge">偵測中…</span>
+			<span class="badge" id="lineBadge"></span>
+		</div>
+		<pre class="output" id="preview">…</pre>
+	</div>
+
+	<div class="card">
+		<h2>安裝</h2>
+		<div class="row">
+			<a class="btn" id="installBtn" href="#">安裝到 Stremio</a>
+			<a class="btn secondary" id="webInstallBtn" href="#" target="_blank" rel="noopener">用網頁版 Stremio 安裝</a>
+			<button class="btn secondary" id="copyBtn" type="button">複製 Manifest 網址</button>
+		</div>
+		<div class="url">
+			<code id="manifestUrl">…</code>
+		</div>
+		<div class="hint" id="installHint">
+			按下「安裝到 Stremio」後，系統會以目前的設定建立一個專屬的 addon 網址；設定不同即為不同的安裝項目，可同時安裝多組。
+		</div>
+	</div>
+
+	<footer>
+		Powered by <a href="https://github.com/nk2028/opencc-js" target="_blank" rel="noopener">opencc-js</a> ・ 字幕來源 OpenSubtitles
+	</footer>
+</div>
+
+<script>
+const SETTINGS = /*__SETTINGS__*/null;
+
+const el = (id) => document.getElementById(id);
+const state = { ...SETTINGS.defaults };
+
+function localeLabel(code) {
+	return SETTINGS.locales[code] || code;
+}
+
+function fillSelect(select, codes, selected) {
+	select.innerHTML = '';
+	for (const code of codes) {
+		const option = document.createElement('option');
+		option.value = code;
+		option.textContent = `${localeLabel(code)}（${code}）`;
+		if (code === selected) option.selected = true;
+		select.appendChild(option);
+	}
+}
+
+function syncToOptions() {
+	const targets = SETTINGS.pairs[state.from] || [];
+	const current = targets.includes(state.to) ? state.to : targets[0];
+	fillSelect(el('to'), targets, current);
+	state.to = current;
+}
+
+function syncProviderFields() {
+	const isRest = state.provider === 'rest';
+	el('sourceUrlField').hidden = isRest;
+	el('apiKeyField').hidden = !isRest;
+}
+
+function readForm() {
+	state.from = el('from').value;
+	state.to = el('to').value;
+	state.mode = el('mode').value;
+	state.keepOriginal = el('keepOriginal').checked;
+	state.customDict = el('customDict').value;
+	state.provider = el('provider').value;
+	state.sourceUrl = el('sourceUrl').value;
+	state.apiKey = el('apiKey').value;
+	state.langs = el('langs').value;
+}
+
+function writeForm() {
+	fillSelect(el('from'), Object.keys(SETTINGS.pairs), state.from);
+	syncToOptions();
+	el('mode').value = state.mode;
+	el('keepOriginal').checked = state.keepOriginal;
+	el('customDict').value = state.customDict;
+	el('provider').value = state.provider;
+	el('sourceUrl').value = state.sourceUrl;
+	el('apiKey').value = state.apiKey;
+	el('langs').value = state.langs;
+	syncProviderFields();
+}
+
+let previewTimer = null;
+
+async function post(path, body) {
+	// Absolute path: the page is also served from /<config>/configure.
+	const response = await fetch(`/${path}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body),
+	});
+	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	return response.json();
+}
+
+async function refreshLinks() {
+	try {
+		const result = await post('api/config', state);
+		// Absolute URLs are built from the browser's own origin, so they stay
+		// correct both behind a proxy and on the published domain.
+		const manifestUrl = `${location.origin}${result.manifestPath}`;
+		el('manifestUrl').textContent = manifestUrl;
+		el('installBtn').href = `stremio://${location.host}${result.manifestPath}`;
+		el('webInstallBtn').href = `https://web.stremio.com/#/addons?addon=${encodeURIComponent(manifestUrl)}`;
+	} catch (error) {
+		el('manifestUrl').textContent = `產生設定失敗：${error.message}`;
+	}
+}
+
+async function refreshPreview() {
+	const text = el('sample').value;
+	try {
+		const result = await post('api/preview', { settings: state, text });
+		el('preview').textContent = result.text || '（無內容）';
+		el('detectBadge').textContent = result.looksSimplified ? '偵測：含簡體字' : '偵測：無簡體字';
+		el('detectBadge').className = 'badge ' + (result.looksSimplified ? 'warn' : 'ok');
+		if (result.skipped) {
+			el('lineBadge').textContent = '自動模式：原樣輸出';
+		} else {
+			el('lineBadge').textContent = `轉換 ${result.convertedLines} / ${result.totalLines} 行`;
+		}
+	} catch (error) {
+		el('preview').textContent = `預覽失敗：${error.message}`;
+	}
+}
+
+function schedulePreview() {
+	clearTimeout(previewTimer);
+	previewTimer = setTimeout(refreshPreview, 250);
+}
+
+function onFormChange(event) {
+	const id = event.target.id;
+	if (id === 'from') {
+		state.from = el('from').value;
+		syncToOptions();
+	} else {
+		readForm();
+	}
+	if (id === 'provider') syncProviderFields();
+	refreshLinks();
+	schedulePreview();
+}
+
+for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sourceUrl', 'apiKey', 'langs']) {
+	el(id).addEventListener('input', onFormChange);
+	el(id).addEventListener('change', onFormChange);
+}
+el('sample').addEventListener('input', schedulePreview);
+
+el('copyBtn').addEventListener('click', async () => {
+	try {
+		await navigator.clipboard.writeText(el('manifestUrl').textContent);
+		el('copyBtn').textContent = '已複製';
+		setTimeout(() => { el('copyBtn').textContent = '複製 Manifest 網址'; }, 1500);
+	} catch {
+		el('copyBtn').textContent = '複製失敗';
+	}
+});
+
+writeForm();
+refreshLinks();
+refreshPreview();
+</script>
+</body>
+</html>
