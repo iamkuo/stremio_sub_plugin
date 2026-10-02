@@ -24,12 +24,18 @@ const { encodeToken } = require('./token');
 
 const MAX_CONVERTED_ENTRIES = 5;
 const MAX_FALLBACK_ENTRIES = 5;
-const RELEASE_LABEL_LIMIT = 24;
+const RELEASE_LABEL_LIMIT = 30;
+
+/** Trailing language tags in release names (`....x264-AMIABLE.cht.srt`). */
+const LANGUAGE_TOKEN = /^(cht|chs|chi|zho|zht|zh|cn|tw|hk|eng|en|jpn|ja|kor|ko|spa|es|fra|fre|deu|ger|ita)$/i;
 
 /**
  * Compact, human readable hint of which release a subtitle came from.
- * Release file names are long and full of dots, so they are normalised and
- * truncated rather than shown verbatim.
+ *
+ * Release names start with the film title, which every candidate shares and
+ * the viewer already knows; the part that actually tells releases apart is the
+ * tail (`1080p BluRay x264-AMIABLE`). So a long name keeps its last whole
+ * tokens and drops the title, rather than being cut off after the title.
  */
 function releaseLabel(name) {
 	const cleaned = String(name || '')
@@ -38,8 +44,19 @@ function releaseLabel(name) {
 		.replace(/\s+/g, ' ')
 		.trim();
 	if (!cleaned) return '';
-	if (cleaned.length <= RELEASE_LABEL_LIMIT) return cleaned;
-	return `${cleaned.slice(0, RELEASE_LABEL_LIMIT - 1).trimEnd()}…`;
+
+	const tokens = cleaned.split(' ');
+	while (tokens.length > 1 && LANGUAGE_TOKEN.test(tokens[tokens.length - 1])) tokens.pop();
+	const trimmed = tokens.join(' ');
+	if (trimmed.length <= RELEASE_LABEL_LIMIT) return trimmed;
+
+	let tail = '';
+	for (let index = tokens.length - 1; index >= 0; index -= 1) {
+		const candidate = tokens.slice(index).join(' ');
+		if (candidate.length > RELEASE_LABEL_LIMIT - 1) break;
+		tail = candidate;
+	}
+	return tail ? `…${tail}` : `…${trimmed.slice(0, RELEASE_LABEL_LIMIT - 1)}`;
 }
 
 /** Joins the kind and the release hint into one compact label. */
@@ -82,6 +99,21 @@ function fallbackCandidates(cfg, items) {
 		.sort((a, b) => a.rank - b.rank || a.index - b.index)
 		.slice(0, MAX_FALLBACK_ENTRIES)
 		.map((entry) => entry.item);
+}
+
+/**
+ * Two genuinely different releases can still compact to the same label. A
+ * numeric suffix keeps every row in the picker distinguishable.
+ */
+function disambiguateLabels(subtitles) {
+	const seen = new Map();
+	for (const entry of subtitles) {
+		if (!entry.label) continue;
+		const count = (seen.get(entry.label) || 0) + 1;
+		seen.set(entry.label, count);
+		if (count > 1) entry.label = `${entry.label} (${count})`;
+	}
+	return subtitles;
 }
 
 async function handleSubtitles({ type, id, config, baseUrl }) {
@@ -127,7 +159,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 		});
 	}
 
-	return { subtitles };
+	return { subtitles: disambiguateLabels(subtitles) };
 }
 
 module.exports = {
@@ -135,6 +167,7 @@ module.exports = {
 	dedupe,
 	releaseLabel,
 	composeLabel,
+	disambiguateLabels,
 	MAX_CONVERTED_ENTRIES,
 	MAX_FALLBACK_ENTRIES,
 	RELEASE_LABEL_LIMIT,

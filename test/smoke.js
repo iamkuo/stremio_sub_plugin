@@ -168,7 +168,7 @@ const { encodeConfig, decodeConfig } = require('../src/config');
 const { convertSubtitle, looksSimplified } = require('../src/opencc');
 const { batchTexts, splitSegments, apiHost } = require('../src/deepl');
 const { toDeepLSource, toDeepLTarget } = require('../src/langs');
-	const { composeLabel, releaseLabel, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
+	const { composeLabel, releaseLabel, disambiguateLabels, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
 
 const BASE = `http://127.0.0.1:${PORT}`;
 const SOURCE_URL = `http://127.0.0.1:${MOCK_PORT}`;
@@ -271,9 +271,18 @@ function unitTests() {
 	// Compact, descriptive labels.
 	assert.strictEqual(composeLabel('繁體中文', ''), '繁體中文');
 	assert.strictEqual(composeLabel('繁體中文', 'Inception.2010.720p.srt'), '繁體中文 · Inception 2010 720p');
+	assert.strictEqual(
+		releaseLabel('Alita.Battle.Angel.2019.1080p.BluRay.x264-AMIABLE.cht.srt'),
+		'…1080p BluRay x264-AMIABLE',
+		'a long name must keep the release tail, not the film title'
+	);
 	assert.strictEqual(releaseLabel('a'.repeat(80)).length, RELEASE_LABEL_LIMIT);
-	assert.ok(composeLabel('繁體中文', 'a'.repeat(80)).endsWith('…'));
+	assert.ok(composeLabel('繁體中文', 'a'.repeat(80)).includes('…'), 'truncated names are marked with an ellipsis');
 	assert.ok(composeLabel('繁體中文', 'a'.repeat(80)).length <= RELEASE_LABEL_LIMIT + 8);
+
+	// Equal labels are numbered so no two rows look the same.
+	const rows = disambiguateLabels([{ label: '繁體中文 · 1080p' }, { label: '繁體中文 · 1080p' }, { label: 'x' }]);
+	assert.deepStrictEqual(rows.map((row) => row.label), ['繁體中文 · 1080p', '繁體中文 · 1080p (2)', 'x']);
 	console.log('unit      ok');
 }
 
@@ -357,8 +366,9 @@ async function conversionTests() {
 
 	const labels = many.json.subtitles.map((sub) => sub.label);
 	assert.ok(labels.every((label) => label.startsWith('繁體中文 · ') || label.startsWith('簡體原文 · ')));
-	assert.ok(labels.every((label) => label.length <= 34), 'labels must stay compact');
+	assert.ok(labels.every((label) => label.length <= 40), 'labels must stay compact');
 	assert.ok(labels.every((label) => !label.includes('.srt')), 'labels must not leak the file extension');
+	assert.strictEqual(new Set(labels).size, labels.length, 'no two rows may look identical');
 	console.log('converted ok');
 }
 

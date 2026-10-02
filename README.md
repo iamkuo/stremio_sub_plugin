@@ -130,11 +130,17 @@ Stremio 的字幕選單對每個項目只顯示「語言」與「來源 addon」
 
   | 種類 | 標籤範例 |
   | --- | --- |
-  | OpenCC 轉換 | `繁體中文 · Inception 2010 720p BluRay x264` |
-  | 未轉換原文（`keepOriginal`） | `簡體原文 · Inception 2010 720p BluRay x264` |
-  | DeepL 翻譯 | `繁體中文（DeepL） · Inception 2010 720p BluRay x264` |
+  | OpenCC 轉換 | `繁體中文 · …1080p BluRay x264-AMIABLE` |
+  | 未轉換原文（`keepOriginal`） | `簡體原文 · …1080p BluRay x264-AMIABLE` |
+  | DeepL 翻譯 | `繁體中文（DeepL） · …1080p BluRay x264-AMIABLE` |
 
-  版本名稱會正規化（去除副檔名、把 `.`／`_` 換成空白）並截斷至 24 字元，沒有版本資訊時只顯示種類。
+  版本名稱的處理規則：
+
+  - 去除副檔名、把 `.`／`_` 換成空白，並移除結尾多餘的語言標記（`cht`、`eng`…）。
+  - 太長時**保留尾端**的版本資訊而不是片名開頭：同一部片的候選都共用片名，
+    真正能分辨版本的是 `1080p BluRay x264-AMIABLE` 這一段。
+  - 截斷至 30 字元並在前面加上 `…`；完全沒有版本資訊時只顯示種類。
+  - 若兩個版本壓縮後標籤仍然相同，會自動加上 ` (2)`、` (3)` 序號，確保每一列都分得出來。
 
 > `label` 需要 Stremio core **v0.55.0 以上**才會顯示；較舊的客戶端與部分平台（例如 Android 的
 > protobuf 橋接尚未傳遞此欄位）仍只顯示語言名稱，此時清單只會看到數筆「Chinese (Traditional)」，
