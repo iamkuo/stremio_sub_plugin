@@ -28,6 +28,9 @@ const PAIRS = {
 const DEFAULT_FROM = 'cn';
 const DEFAULT_TO = 'twp';
 
+/** Target locales that produce Traditional Chinese output. */
+const TRADITIONAL_TARGETS = new Set(['t', 'tw', 'twp', 'hk', 'hkp']);
+
 const SIMPLIFIED_SET = new Set(Array.from(SIMPLIFIED_CHARS));
 
 /** Returns a supported [from, to] pair, falling back to the default one. */
@@ -136,6 +139,7 @@ module.exports = {
 	PAIRS,
 	DEFAULT_FROM,
 	DEFAULT_TO,
+	TRADITIONAL_TARGETS,
 	resolvePair,
 	targetsFor,
 	outputLang,

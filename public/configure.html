@@ -198,6 +198,28 @@
 	</div>
 
 	<div class="card">
+		<h2>DeepL 備援翻譯（選填）</h2>
+		<p class="hint" style="margin-top:-6px">
+			當影片<strong>完全找不到中文（或簡體）字幕</strong>時，改用 DeepL 翻譯下面列出的語言。需要你自己的 DeepL API Key；
+			翻譯只在你實際選擇該字幕時才會發生，所以瀏覽字幕清單不會浪費額度。
+		</p>
+		<div class="field">
+			<label for="deeplKey">DeepL API Key</label>
+			<input type="password" id="deeplKey" spellcheck="false" autocomplete="off" placeholder="免費金鑰以 :fx 結尾">
+			<div class="hint">金鑰只存在你自己的安裝網址中，伺服器不會儲存任何使用者資料。免費方案每月 50 萬字元。</div>
+		</div>
+		<div class="field">
+			<label for="fallbackLangs">備援語言（DeepL 翻譯來源）</label>
+			<input type="text" id="fallbackLangs" spellcheck="false">
+			<div class="hint">以逗號分隔，預設 <code>eng</code>。清空此欄即停用備援翻譯。</div>
+		</div>
+		<div class="row">
+			<button class="btn secondary" id="deeplCheckBtn" type="button">檢查金鑰與額度</button>
+			<span class="badge" id="deeplBadge" hidden></span>
+		</div>
+	</div>
+
+	<div class="card">
 		<h2>即時預覽</h2>
 		<div class="field">
 		<textarea id="sample" spellcheck="false">1
@@ -279,6 +301,8 @@ function readForm() {
 	state.sourceUrl = el('sourceUrl').value;
 	state.apiKey = el('apiKey').value;
 	state.langs = el('langs').value;
+	state.deeplKey = el('deeplKey').value;
+	state.fallbackLangs = el('fallbackLangs').value;
 }
 
 function writeForm() {
@@ -291,6 +315,8 @@ function writeForm() {
 	el('sourceUrl').value = state.sourceUrl;
 	el('apiKey').value = state.apiKey;
 	el('langs').value = state.langs;
+	el('deeplKey').value = state.deeplKey;
+	el('fallbackLangs').value = state.fallbackLangs;
 	syncProviderFields();
 }
 
@@ -356,11 +382,32 @@ function onFormChange(event) {
 	schedulePreview();
 }
 
-for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sourceUrl', 'apiKey', 'langs']) {
+for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sourceUrl', 'apiKey', 'langs', 'deeplKey', 'fallbackLangs']) {
 	el(id).addEventListener('input', onFormChange);
 	el(id).addEventListener('change', onFormChange);
 }
 el('sample').addEventListener('input', schedulePreview);
+
+el('deeplCheckBtn').addEventListener('click', async () => {
+	readForm();
+	const badge = el('deeplBadge');
+	badge.hidden = false;
+	badge.className = 'badge';
+	badge.textContent = '檢查中…';
+	try {
+		const result = await post('api/deepl-usage', { settings: state });
+		if (result.ok) {
+			badge.className = 'badge ok';
+			badge.textContent = `金鑰有效 ・ 已用 ${result.characterCount.toLocaleString()} / ${result.characterLimit.toLocaleString()} 字元（${result.percent}%）`;
+		} else {
+			badge.className = 'badge warn';
+			badge.textContent = result.error;
+		}
+	} catch (error) {
+		badge.className = 'badge warn';
+		badge.textContent = `檢查失敗：${error.message}`;
+	}
+});
 
 el('copyBtn').addEventListener('click', async () => {
 	try {

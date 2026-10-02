@@ -1,7 +1,9 @@
 'use strict';
 
 const iconv = require('iconv-lite');
-const { convertSubtitle } = require('./opencc');
+const { convertSubtitle, TRADITIONAL_TARGETS } = require('./opencc');
+const { toDeepLSource, toDeepLTarget } = require('./langs');
+const { translateSubtitle } = require('./deepl');
 const { resolveDownloadLink } = require('./sources');
 const { decodeToken } = require('./token');
 
@@ -66,7 +68,37 @@ async function downloadSubtitle(url) {
 }
 
 /**
- * Serves one converted subtitle file.
+ * Machine translates a subtitle with the viewer's own DeepL key.
+ *
+ * DeepL's `ZH-HANT` output is already Traditional Chinese, but it does not
+ * apply Taiwan/Hong Kong vocabulary, so the configured OpenCC pair is run
+ * afterwards when the target is a Traditional variant. That step is a no-op
+ * for character conversion and only localises wording.
+ */
+async function translateWithDeepL(source, cfg, handle) {
+	if (!cfg.deeplKey) {
+		throw Object.assign(new Error('這個字幕需要 DeepL 翻譯，但尚未設定 DeepL API Key'), { statusCode: 400 });
+	}
+
+	const targetLang = toDeepLTarget(cfg.to);
+	const result = await translateSubtitle(source, {
+		apiKey: cfg.deeplKey,
+		sourceLang: toDeepLSource(handle.sourceLang),
+		targetLang,
+	});
+
+	if (TRADITIONAL_TARGETS.has(cfg.to)) {
+		try {
+			return convertSubtitle(result.text, { ...cfg, mode: 'always' }).text;
+		} catch {
+			return result.text;
+		}
+	}
+	return result.text;
+}
+
+/**
+ * Serves one converted or translated subtitle file.
  *
  * @returns {{ body: string, contentType: string, filename: string }}
  */
@@ -88,10 +120,10 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	const baseName = String(handle.name || 'subtitle').replace(/\.(srt|vtt|ass|ssa)$/i, '') || 'subtitle';
 	const extension = /\.vtt$/i.test(handle.name || '') ? 'vtt' : 'srt';
 
-	let body = source;
-	if (!handle.raw) {
-		body = convertSubtitle(source, cfg).text;
-	}
+	let body;
+	if (handle.raw) body = source;
+	else if (handle.translate) body = await translateWithDeepL(source, cfg, handle);
+	else body = convertSubtitle(source, cfg).text;
 
 	const result = {
 		body,
@@ -103,4 +135,4 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	return result;
 }
 
-module.exports = { buildSubtitleFile, decodeBuffer };
+module.exports = { buildSubtitleFile, decodeBuffer, translateWithDeepL };

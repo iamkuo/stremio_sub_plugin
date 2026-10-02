@@ -8,7 +8,14 @@
  *          this addon dependency free.
  * `rest` – talks to the official OpenSubtitles.com REST API. Much better
  *          Chinese coverage, but requires a (free) API key.
+ *
+ * Listing returns every candidate the source offers; deciding which of them
+ * are usable is the caller's job (see subtitles.js), because the addon keeps
+ * two separate allow lists: Chinese subtitles for OpenCC conversion, and
+ * fallback languages for DeepL translation.
  */
+
+const { normalizeLang, toRestCode } = require('./langs');
 
 const DEFAULT_SOURCE_URL = 'https://opensubtitles-v3.strem.io';
 const REST_BASE = 'https://api.opensubtitles.com/api/v1';
@@ -22,23 +29,34 @@ const CHINESE_LANGS = new Set([
 	'zh-cn', 'zh-tw', 'zh-hk', 'zh-hans', 'zh-hant',
 ]);
 
-function normalizeLang(lang) {
-	return String(lang || '').toLowerCase().replace(/_/g, '-').trim();
-}
-
-function langFilter(cfg) {
-	return String(cfg.langs || '')
+/** Splits a comma/space separated allow list into normalised codes. */
+function langList(value) {
+	return String(value || '')
 		.split(/[,\s]+/)
 		.map(normalizeLang)
 		.filter(Boolean);
 }
 
+/** True when `lang` appears in an explicit allow list. */
+function langInList(list, lang) {
+	const wanted = langList(list);
+	const normalized = normalizeLang(lang);
+	if (!normalized || !wanted.length) return false;
+	return wanted.includes(normalized);
+}
+
+/** True when `lang` is an accepted Chinese source subtitle. */
 function langAllowed(cfg, lang) {
-	const wanted = langFilter(cfg);
+	const wanted = langList(cfg.langs);
 	const normalized = normalizeLang(lang);
 	if (!normalized) return false;
 	if (!wanted.length) return CHINESE_LANGS.has(normalized);
 	return wanted.includes(normalized);
+}
+
+/** True when `lang` may be machine translated as a fallback. */
+function fallbackAllowed(cfg, lang) {
+	return langInList(cfg.fallbackLangs, lang);
 }
 
 /** IMDb ids look like `tt1234567` (movies) or `tt1234567:1:2` (series). */
@@ -64,13 +82,27 @@ async function listFromProxy(cfg, type, id) {
 	const subtitles = (payload && payload.subtitles) || [];
 
 	return subtitles
-		.filter((sub) => sub && sub.url && langAllowed(cfg, sub.lang))
+		.filter((sub) => sub && sub.url)
 		.map((sub) => ({
 			id: String(sub.id || sub.url),
 			url: sub.url,
 			lang: normalizeLang(sub.lang),
 			name: sub.subtitleFileName || sub.movieReleaseName || '',
 		}));
+}
+
+/** Builds the REST `languages` query from both allow lists. */
+function restLanguages(cfg) {
+	const codes = new Set();
+	for (const code of [...langList(cfg.langs), ...langList(cfg.fallbackLangs)]) {
+		const mapped = toRestCode(code);
+		if (mapped) codes.add(mapped);
+	}
+	if (!codes.size) {
+		codes.add('zh-cn');
+		codes.add('zh-tw');
+	}
+	return [...codes].join(',');
 }
 
 async function listFromRest(cfg, type, id) {
@@ -81,7 +113,7 @@ async function listFromRest(cfg, type, id) {
 	const [imdbId, season, episode] = String(id).split(':');
 	const numericId = String(imdbId).replace(/^tt/, '');
 
-	const params = new URLSearchParams({ languages: 'zh-cn,zh-tw' });
+	const params = new URLSearchParams({ languages: restLanguages(cfg) });
 	if (type === 'series') {
 		params.set('parent_imdb_id', numericId);
 		if (season) params.set('season_number', String(Number(season)));
@@ -97,14 +129,12 @@ async function listFromRest(cfg, type, id) {
 	const results = [];
 	for (const item of payload.data || []) {
 		const attributes = item.attributes || {};
-		const lang = normalizeLang(attributes.language);
-		if (!langAllowed(cfg, lang)) continue;
 		const file = (attributes.files || [])[0];
 		if (!file || !file.file_id) continue;
 		results.push({
 			id: String(file.file_id),
 			fileId: file.file_id,
-			lang,
+			lang: normalizeLang(attributes.language),
 			name: file.file_name || attributes.release || '',
 		});
 	}
@@ -122,7 +152,7 @@ async function resolveDownloadLink(cfg, fileId) {
 	return payload.link;
 }
 
-/** Lists candidate subtitles for one video. */
+/** Lists every candidate subtitle for one video, unfiltered. */
 async function listSubtitles(cfg, type, id) {
 	if (!['movie', 'series'].includes(type)) return [];
 	if (cfg.provider === 'rest') return listFromRest(cfg, type, id);
@@ -131,8 +161,13 @@ async function listSubtitles(cfg, type, id) {
 
 module.exports = {
 	DEFAULT_SOURCE_URL,
+	CHINESE_LANGS,
 	listSubtitles,
 	resolveDownloadLink,
 	normalizeLang,
+	langList,
+	langInList,
 	langAllowed,
+	fallbackAllowed,
+	restLanguages,
 };

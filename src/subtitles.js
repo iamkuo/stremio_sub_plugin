@@ -2,15 +2,19 @@
 
 const { decodeConfig } = require('./config');
 const { outputLang } = require('./opencc');
-const { listSubtitles, normalizeLang } = require('./sources');
+const { listSubtitles, normalizeLang, langAllowed, fallbackAllowed } = require('./sources');
 const { encodeToken } = require('./token');
 
 /**
  * Stremio `subtitles` resource handler.
  *
- * Every candidate is returned twice-pointing at our own server, which performs
- * the OpenCC conversion on download. The upstream file is never sent to the
- * player directly, so the player always receives Traditional Chinese.
+ * Chinese candidates are converted with OpenCC on download, so the upstream
+ * file is never sent to the player directly.
+ *
+ * When the video has no Chinese subtitle at all, the configured fallback
+ * languages (English by default) are machine translated with DeepL instead —
+ * but only if the viewer supplied their own DeepL key. Translation happens on
+ * download, not here, so quota is spent only on the subtitle actually picked.
  */
 async function handleSubtitles({ type, id, config, baseUrl }) {
 	const cfg = decodeConfig(config);
@@ -19,7 +23,12 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 	const lang = outputLang(cfg.to);
 	const subtitles = [];
 
-	for (const item of items) {
+	const chinese = items.filter((item) => langAllowed(cfg, item.lang));
+	const translatable = chinese.length || !cfg.deeplKey
+		? []
+		: items.filter((item) => fallbackAllowed(cfg, item.lang));
+
+	for (const item of chinese) {
 		subtitles.push({
 			id: `opencc:${item.id}`,
 			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name })}.srt`,
@@ -33,6 +42,20 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 				lang: normalizeLang(item.lang) || lang,
 			});
 		}
+	}
+
+	for (const item of translatable) {
+		subtitles.push({
+			id: `deepl:${item.id}`,
+			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
+				u: item.url,
+				f: item.fileId,
+				n: item.name,
+				x: 1,
+				s: normalizeLang(item.lang),
+			})}.srt`,
+			lang,
+		});
 	}
 
 	return { subtitles };

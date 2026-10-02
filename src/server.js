@@ -7,6 +7,7 @@ const path = require('path');
 const { DEFAULTS, encodeConfig, normalizeConfig, decodeConfig } = require('./config');
 const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
+const { fetchUsage } = require('./deepl');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
 const SIMPLIFIED_CHARS = require('./data/simplified-chars');
@@ -129,6 +130,26 @@ async function handlePreviewApi(req, res) {
 	});
 }
 
+/** POST /api/deepl-usage – validates the viewer's DeepL key and reads its quota. */
+async function handleDeeplUsage(req, res) {
+	let payload;
+	try {
+		payload = JSON.parse((await readBody(req)) || '{}');
+	} catch {
+		return sendJson(res, 400, { error: 'invalid JSON body' });
+	}
+
+	const cfg = normalizeConfig(payload.settings || payload || {});
+	if (!cfg.deeplKey) return sendJson(res, 200, { ok: false, error: '尚未填入 DeepL API Key' });
+
+	try {
+		const usage = await fetchUsage(cfg.deeplKey);
+		sendJson(res, 200, { ok: true, ...usage });
+	} catch (error) {
+		sendJson(res, 200, { ok: false, error: error.message });
+	}
+}
+
 const server = http.createServer(async (req, res) => {
 	if (req.method === 'OPTIONS') {
 		return send(res, 204, '', {
@@ -148,6 +169,9 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'preview') {
 			return handlePreviewApi(req, res);
+		}
+		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'deepl-usage') {
+			return handleDeeplUsage(req, res);
 		}
 		if (segments[0] === 'health') {
 			return sendJson(res, 200, { status: 'ok', manifest: `${baseUrl}/manifest.json` });

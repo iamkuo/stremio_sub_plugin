@@ -12,11 +12,14 @@ const DEFAULTS = {
 	to: DEFAULT_TO,
 	mode: 'auto', // 'auto' = only convert Simplified subtitles, 'always' = always convert
 	keepOriginal: false, // also expose the untouched source subtitle
-	langs: 'zht,chi,zho,chs,cht,zh-cn,zh-tw', // accepted source subtitle language codes
+	langs: 'zht,chi,zho,chs,cht,zh-cn,zh-tw', // accepted Chinese subtitle language codes
 	provider: 'v3', // 'v3' = OpenSubtitles v3 proxy (no key), 'rest' = OpenSubtitles.com API
 	sourceUrl: 'https://opensubtitles-v3.strem.io',
-	apiKey: '',
+	apiKey: '', // OpenSubtitles.com API key
 	customDict: '',
+	// DeepL fallback: used only when no Chinese subtitle exists for the video.
+	deeplKey: '', // the viewer's own DeepL API key
+	fallbackLangs: 'eng', // languages to machine translate when no Chinese subtitle exists
 };
 
 const KEYMAP = {
@@ -29,6 +32,8 @@ const KEYMAP = {
 	sourceUrl: 'u',
 	apiKey: 'a',
 	customDict: 'd',
+	deeplKey: 'dk',
+	fallbackLangs: 'fl',
 };
 
 const PROVIDERS = ['v3', 'rest'];
@@ -60,6 +65,8 @@ function normalizeConfig(raw) {
 	cfg.sourceUrl = String(cfg.sourceUrl || '').trim() || DEFAULTS.sourceUrl;
 	cfg.apiKey = String(cfg.apiKey || '').trim();
 	cfg.customDict = String(cfg.customDict || '');
+	cfg.deeplKey = String(cfg.deeplKey || '').trim();
+	cfg.fallbackLangs = String(cfg.fallbackLangs || '').trim();
 	return cfg;
 }
 

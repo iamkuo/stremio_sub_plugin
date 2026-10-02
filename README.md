@@ -7,17 +7,21 @@
 轉換，再把繁體字幕回傳給播放器。所有 OpenCC 轉換選項（來源語言、目標語言、自訂詞彙、轉換時機）
 都在設定網頁上以圖形介面呈現。
 
+如果影片**完全找不到中文字幕**，外掛可以改用你自己提供的 DeepL API Key，把備援語言
+（預設英文）的字幕機器翻譯成繁體中文。
+
 ```
 Stremio 播放器
    │  1. GET /<config>/subtitles/movie/tt1375666.json
    ▼
-本外掛 ──2. 取得簡體字幕清單──▶ OpenSubtitles
+本外掛 ──2. 取得字幕清單──▶ OpenSubtitles
    │  3. 回傳指向 /srt/<config>/<token>.srt 的字幕項目
    ▼
 Stremio 播放器
    │  4. GET /srt/<config>/<token>.srt
    ▼
-本外掛 ──5. 下載原始字幕 + OpenCC 轉換──▶ 回傳繁體 SRT
+本外掛 ──5a. 有中文字幕：下載 + OpenCC 轉換────────────▶ 回傳繁體 SRT
+       └─5b. 沒有中文字幕：下載備援語言字幕 + DeepL 翻譯──▶ 回傳繁體 SRT
 ```
 
 ## 功能
@@ -29,6 +33,8 @@ Stremio 播放器
 - **保留原始字幕**：可同時在字幕清單中提供未轉換的版本，方便比對。
 - **兩種字幕來源**：免金鑰的 OpenSubtitles v3 代理，或需要 API Key 但中文片源較多的
   OpenSubtitles.com REST API。
+- **DeepL 備援翻譯**：找不到任何中文字幕時，用你自己的 DeepL API Key 翻譯備援語言
+  （預設 `eng`）的字幕；翻譯只在你實際選擇該字幕時才發生，瀏覽清單不會浪費額度。
 - **設定網頁**：即時預覽、一鍵產生 `stremio://` 安裝連結，設定不同即為不同的安裝項目，可同時安裝多組。
 - 零原生依賴（不需要編譯 OpenCC C++ 函式庫），可直接部署到任何 Node.js 環境。
 
@@ -36,10 +42,10 @@ Stremio 播放器
 
 ```bash
 npm install          # 會自動執行 tools/build.js 產生簡體字表
-npm start            # 預設 http://localhost:7000
+npm start            # 預設 http://localhost:3000
 ```
 
-開啟 <http://localhost:7000/configure> 調整設定，按「安裝到 Stremio」即可。
+開啟 <http://localhost:3000/configure> 調整設定，按「安裝到 Stremio」即可。
 
 開發時可用 `npm run dev`（Node 的 `--watch` 模式）。
 
@@ -47,9 +53,10 @@ npm start            # 預設 http://localhost:7000
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
-| `PORT` | `7000` | 監聽埠 |
+| `PORT` | `3000` | 監聽埠 |
 | `HOST` | `0.0.0.0` | 監聽位址 |
 | `BASE_URL` | 自動由請求標頭推斷 | 對外公開網址。放在反向代理後方時建議明確設定，例如 `https://subs.example.com` |
+| `DEEPL_API_URL` | 依金鑰自動選擇 | 覆寫 DeepL 端點，僅測試時使用（正式環境不需設定） |
 
 ## 設定項目
 
@@ -67,6 +74,8 @@ npm start            # 預設 http://localhost:7000
 | `sourceUrl` | `v3` 模式要代理的伺服器網址 | `https://opensubtitles-v3.strem.io` |
 | `apiKey` | `rest` 模式的 OpenSubtitles.com API Key | 空 |
 | `langs` | 接受的字幕語言代碼（逗號分隔） | `zht,chi,zho,chs,cht,zh-cn,zh-tw` |
+| `deeplKey` | DeepL API Key（啟用備援翻譯，見下節） | 空 |
+| `fallbackLangs` | 沒有中文字幕時要翻譯的來源語言（逗號分隔，留空即停用） | `eng` |
 
 ### OpenCC 轉換組合
 
@@ -107,6 +116,39 @@ npm start            # 預設 http://localhost:7000
 ```
 
 自訂詞彙是在 OpenCC 標準轉換**之後**套用，所以左右兩邊都寫轉換後的繁體形式即可覆寫 OpenCC 的結果。
+
+## DeepL 備援翻譯
+
+當一部影片在來源上**完全沒有中文字幕**時，外掛可以退而求其次：取一份英文（或你指定的語言）
+字幕，用 DeepL 翻譯成繁體中文再交給播放器。
+
+### 啟用方式
+
+1. 到 <https://www.deepl.com/pro-api> 註冊免費 API 方案，在帳戶頁取得 API Key（免費金鑰以 `:fx` 結尾）。
+2. 在設定頁的「DeepL 備援翻譯」填入金鑰，按「檢查金鑰與額度」確認可用。
+3. 「備援語言」預設 `eng`，可填多個（例如 `eng,jpn`）。
+
+### 行為
+
+- **只在沒有中文字幕時才使用**：只要來源有符合「接受的字幕語言代碼」的中文（或簡體）字幕，
+  就仍然走 OpenCC 轉換，完全不動用 DeepL 額度。
+- **翻譯發生在下載時**，不是列出清單時。瀏覽字幕清單、切換集數都不會消耗額度；只有你真正選了
+  那個字幕才會翻譯，結果會快取 1 小時。
+- **目標語言**由 OpenCC 的「目標語言」決定：繁體系列 → DeepL `ZH-HANT`，簡體 → `ZH-HANS`，日文 → `JA`。
+- **來源語言**由字幕的語言代碼自動對應（`eng` → `EN`、`jpn` → `JA`…），無法對應時交給 DeepL 自動偵測。
+- 翻譯結果會再套用一次你設定的 OpenCC 組合，把台灣／香港用語（`軟件→軟體`、`視頻→影片`）一併在地化。
+
+### 成本與限制
+
+| 項目 | 值 |
+| --- | --- |
+| 免費額度 | 每月 50 萬字元（一部電影字幕約 3～6 萬字元，約可翻 8～15 部） |
+| 每次請求 | 最多 50 段文字、128 KiB；外掛會自動分批送出 |
+| 額度用盡 | DeepL 回傳 HTTP 456，播放器會顯示一行以 `#` 開頭的說明，而不是壞掉的字幕 |
+
+> **金鑰存放位置**：DeepL 金鑰會編碼在你自己的 addon 安裝網址中（`base64url`），
+> 伺服器不儲存、不記錄任何使用者的金鑰或字幕內容。也因為如此，**不要把含金鑰的安裝網址分享給別人**。
+> 若不想外洩，把「備援語言」清空即可完全停用這條路徑。
 
 ## 字幕來源
 
@@ -158,8 +200,8 @@ POST https://api.opensubtitles.com/api/v1/download   { "file_id": 123456 }
 | 平台 | 做法 | 備註 |
 | --- | --- | --- |
 | **Render / Railway / Fly.io** | 連接 GitHub repo，Build `npm install`，Start `npm start` | 最簡單，持久執行、自動 HTTPS |
-| **Docker** | 內含 `Dockerfile`：`docker build -t opencc-stremio . && docker run -p 7000:7000 opencc-stremio` | 可放任意 VPS／NAS |
-| **自己的 VPS** | `npm ci && PORT=7000 BASE_URL=https://subs.example.com npm start`，前面放 Nginx/Caddy 反向代理並簽 TLS | 記得設 `BASE_URL` |
+| **Docker** | 內含 `Dockerfile`：`docker build -t opencc-stremio . && docker run -p 3000:3000 opencc-stremio` | 可放任意 VPS／NAS，會讀取 `PORT` |
+| **自己的 VPS** | `npm ci && PORT=3000 BASE_URL=https://subs.example.com npm start`，前面放 Nginx/Caddy 反向代理並簽 TLS | 記得設 `BASE_URL` |
 | **ElfHosted** | 社群提供 Stremio addon 代管，可申請部署 | 專為 Stremio addon 設計 |
 | **Vercel / Netlify** | 需改寫成 serverless function（字幕轉換會佔用較長執行時間，且有 1.2 MB 字典載入成本） | 不建議 |
 
@@ -183,6 +225,8 @@ src/
   manifest.js        addon manifest
   config.js          設定的編碼與解碼（base64url + 短鍵）
   opencc.js          OpenCC 轉換、自訂詞彙、簡體偵測
+  deepl.js           DeepL 翻譯（分批、重試、錯誤訊息）
+  langs.js           語言代碼對應（Stremio ↔ DeepL ↔ OpenSubtitles REST）
   sources.js         字幕來源（v3 代理 / OpenSubtitles.com REST）
   subtitles.js       Stremio subtitles 資源處理器
   subtitle-file.js   下載字幕、判斷編碼、轉換、回傳
@@ -215,6 +259,9 @@ PUB=https://your-addon CFG=<config> node test/live-check.js
   若仍異常，請開 issue 並附上來源網址。
 - **安裝後看不到設定按鈕**：manifest 在已有設定時會移除 `configurable`，這是正常行為；
   請回到 `/configure` 重新產生連結。
+- **沒有出現 DeepL 翻譯的字幕**：只有在來源**完全沒有**中文字幕時才會啟用，且必須同時填了
+  DeepL 金鑰與備援語言。可按設定頁的「檢查金鑰與額度」確認金鑰有效。
+- **字幕顯示 `# DeepL 額度已用完`**：免費方案每月 50 萬字元用盡，請等月初重置或升級 DeepL 方案。
 - **反向代理後網址錯誤**：設定 `BASE_URL` 環境變數。
 
 ## 授權
