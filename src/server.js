@@ -94,7 +94,9 @@ async function handleConfigApi(req, res, baseUrl) {
 		return sendJson(res, 400, { error: 'invalid JSON body' });
 	}
 
-	const cfg = normalizeConfig(payload);
+	// Accept both a flat settings object and one wrapped in `settings`, so the
+	// endpoint stays usable from scripts as well as from the page.
+	const cfg = normalizeConfig(payload.settings || payload);
 	const encoded = encodeConfig(cfg);
 
 	// Only a relative path is returned: the configuration page composes the
