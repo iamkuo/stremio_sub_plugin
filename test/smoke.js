@@ -603,6 +603,7 @@ async function httpTests() {
 	assert.ok(page.body.includes('sourceCheckBtn'), 'the source checker must be present');
 	assert.ok(page.body.includes('id="secondary"'), 'the secondary language control must be present');
 	assert.ok(page.body.includes('id="primaryPicker"') && page.body.includes('id="secondaryPicker"'), 'both tiers need a picker');
+	assert.ok(page.body.includes('id="translatePicker"'), 'the translation source needs a picker too');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');
 	assert.ok(!page.body.includes('__SETTINGS__'), 'settings must be injected into the page');

@@ -250,11 +250,12 @@
 			<div class="hint"><strong>有就顯示、沒有就算了</strong>，不會觸發翻譯。筆數同主要語言。</div>
 		</div>
 		<div class="field">
-			<label for="fallbackLangs">翻譯來源</label>
+			<label>翻譯來源</label>
+			<div class="langgrid" id="translatePicker"></div>
 			<input type="text" id="fallbackLangs" spellcheck="false">
 			<div class="hint">
-				主要語言缺字幕時從這些語言翻譯過去，逗號分隔、預設 <code>eng</code>，依順序排優先。
-				清空即停用翻譯。翻譯只在你實際選了那筆字幕時才發生，瀏覽清單不會產生任何請求。
+				主要語言缺字幕時從這些語言翻譯過去，<strong>依點選順序排優先</strong>，預設 <code>eng</code>。
+				全部取消即停用翻譯。翻譯只在你實際選了那筆字幕時才發生，瀏覽清單不會產生任何請求。
 			</div>
 		</div>
 	</div>
@@ -460,6 +461,7 @@ function writeForm() {
 	el('fpsMode').value = state.fpsMode;
 	renderPicker('primaryPicker', 'langs', 'langs');
 	renderPicker('secondaryPicker', 'secondary', 'secondary');
+	renderPicker('translatePicker', 'fallbackLangs', 'fallbackLangs');
 }
 
 /**
