@@ -2,9 +2,9 @@
 
 const { decodeConfig, clampPerLanguageLimit } = require('./config');
 const { outputLang, convertSubtitle, looksSimplified } = require('./opencc');
-const { listSubtitles, normalizeLang, langList } = require('./sources');
+const { listSubtitles, normalizeLang } = require('./sources');
 const { sourceList } = require('./sources');
-const { canonicalLang, languageName } = require('./langs');
+const { canonicalLang, canonicalList, languageName, toGoogleLanguage } = require('./langs');
 const { rankByMatch } = require('./match');
 const { fetchRuntimeSeconds } = require('./cinemeta');
 const { encodeToken } = require('./token');
@@ -31,8 +31,6 @@ const { encodeToken } = require('./token');
  * identical rows is worse than a short list.
  */
 
-/** Hard upper bound on fallback entries; `fallbackLimit` picks the real length. */
-const MAX_FALLBACK_ENTRIES = 5;
 const RELEASE_LABEL_LIMIT = 30;
 
 /** Trailing language tags in release names (`....x264-AMIABLE.cht.srt`). */
@@ -104,14 +102,21 @@ function convertedLabel(cfg) {
 }
 
 /**
- * The languages to list, in the order the viewer asked for them. Chinese
- * spellings collapse into one entry so `zht,chi,zh-tw` is not three languages.
+ * The primary languages, in the order the viewer asked for them.
+ *
+ * A primary language is a promise: if the film has nothing in it, a machine
+ * translation is offered rather than an empty slot. Chinese spellings collapse
+ * into one entry so `zht,chi,zh-tw` is not three languages.
  */
-function displayLanguages(cfg) {
-	const codes = langList(cfg.langs).map(canonicalLang).filter(Boolean);
-	const unique = [];
-	for (const code of codes) if (!unique.includes(code)) unique.push(code);
-	return unique.length ? unique : ['zh'];
+function primaryLanguages(cfg) {
+	const codes = canonicalList(cfg.langs);
+	return codes.length ? codes : ['zh'];
+}
+
+/** The secondary languages: a preference, listed only when the film has them. */
+function secondaryLanguages(cfg) {
+	const primary = primaryLanguages(cfg);
+	return canonicalList(cfg.secondary).filter((code) => !primary.includes(code));
 }
 
 /**
@@ -164,21 +169,27 @@ function rankAndPick(items, extras, limit) {
 }
 
 /**
- * Fallback candidates ordered by the priority of the configured language list,
- * so `eng,jpn` prefers English releases and only then Japanese ones.
+ * The files a primary language is translated from, ordered by the priority of
+ * the configured source languages, so `eng,jpn` prefers English releases and
+ * only then Japanese ones.
+ *
+ * `skip` is the language being translated into: translating a language into
+ * itself would be pointless and would occupy a slot that a real translation
+ * could use.
  */
-function fallbackCandidates(cfg, items) {
-	const priority = langList(cfg.fallbackLangs);
+function translationSources(from, items, limit, skip) {
 	const ranked = [];
 
 	items.forEach((item, index) => {
-		const rank = priority.indexOf(normalizeLang(item.lang));
+		const code = canonicalLang(item.lang);
+		if (!code || code === skip) return;
+		const rank = from.indexOf(code);
 		if (rank !== -1) ranked.push({ item, rank, index });
 	});
 
 	return ranked
 		.sort((a, b) => a.rank - b.rank || a.index - b.index)
-		.slice(0, Math.min(Math.max(1, Number(cfg.fallbackLimit) || 1), MAX_FALLBACK_ENTRIES))
+		.slice(0, limit)
 		.map((entry) => entry.item);
 }
 
@@ -201,11 +212,13 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 	const cfg = decodeConfig(config);
 	const items = dedupe(await listSubtitles(cfg, type, id, extras));
 	const pathSegment = config || 'default';
-	const lang = outputLang(cfg.to);
+	const chineseLang = outputLang(cfg.to);
 	const subtitles = [];
 	const showOrigin = sourceList(cfg.sources).length > 1;
 	const limit = clampPerLanguageLimit(cfg.perLanguageLimit);
-	const wanted = displayLanguages(cfg);
+	const primary = primaryLanguages(cfg);
+	const secondary = secondaryLanguages(cfg);
+	const translateFrom = canonicalList(cfg.fallbackLangs);
 
 	// The frame-rate check itself runs on download, because what decides it is
 	// whether the subtitle runs short or long — which is only known once the
@@ -226,22 +239,17 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 		byLanguage.get(code).push(item);
 	}
 
-	let listedChinese = false;
-
-	for (const code of wanted) {
-		const group = byLanguage.get(code);
-		if (!group || !group.length) continue;
-
+	/** The files the film already has in one language, converted when Chinese. */
+	const listExisting = (code, group) => {
 		for (const { item, best } of rankAndPick(group, extras, limit)) {
 			const name = traditionalName(item.name, cfg);
 			const mark = best ? '✓ ' : '';
 
 			if (code === 'zh') {
-				listedChinese = true;
 				subtitles.push({
 					id: `opencc:${item.id}`,
 					url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, ...timing })}.srt`,
-					lang,
+					lang: chineseLang,
 					label: composeLabel(mark + withOrigin(convertedLabel(cfg), item, showOrigin), name),
 				});
 				continue;
@@ -256,28 +264,49 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 				label: composeLabel(mark + withOrigin(languageName(code), item, showOrigin), name),
 			});
 		}
-	}
+	};
 
-	// The machine translation only exists for the case it was built for: the
-	// video has no Chinese subtitle at all. `fallbackCandidates` already yields
-	// nothing when no fallback language is configured.
-	if (!listedChinese) {
-		const fallbackLabel = `${convertedLabel(cfg)}（Google）`;
-		for (const item of fallbackCandidates(cfg, items)) {
+	/**
+	 * What a primary language falls back to: files in the configured source
+	 * languages, translated into that language on download.
+	 *
+	 * Nothing is offered when Google cannot produce the language at all — better
+	 * an absent entry than one that can only fail when the viewer picks it.
+	 */
+	const listTranslated = (code) => {
+		const target = toGoogleLanguage(code, cfg.to);
+		if (!target) return;
+		const kind = code === 'zh' ? convertedLabel(cfg) : languageName(code);
+		for (const item of translationSources(translateFrom, items, limit, code)) {
 			subtitles.push({
-				id: `machine:${item.id}`,
+				id: `machine:${code}:${item.id}`,
 				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
 					u: item.url,
 					f: item.fileId,
 					n: item.name,
 					x: 1,
 					s: normalizeLang(item.lang),
+					g: target,
 					...timing,
 				})}.srt`,
-				lang,
-				label: composeLabel(fallbackLabel, traditionalName(item.name, cfg)),
+				lang: code === 'zh' ? chineseLang : code,
+				label: composeLabel(`${kind}（Google）`, traditionalName(item.name, cfg)),
 			});
 		}
+	};
+
+	// A primary language is a promise, so a missing one is translated into.
+	for (const code of primary) {
+		const group = byLanguage.get(code);
+		if (group && group.length) listExisting(code, group);
+		else listTranslated(code);
+	}
+
+	// A secondary language is a preference: listed when the film has it, and
+	// otherwise simply absent.
+	for (const code of secondary) {
+		const group = byLanguage.get(code);
+		if (group && group.length) listExisting(code, group);
 	}
 
 	return { subtitles: disambiguateLabels(subtitles) };
@@ -290,10 +319,10 @@ module.exports = {
 	composeLabel,
 	traditionalName,
 	convertedLabel,
-	displayLanguages,
+	primaryLanguages,
+	secondaryLanguages,
 	rankAndPick,
 	withOrigin,
 	disambiguateLabels,
-	MAX_FALLBACK_ENTRIES,
 	RELEASE_LABEL_LIMIT,
 };

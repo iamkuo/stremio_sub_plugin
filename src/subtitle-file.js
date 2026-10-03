@@ -74,21 +74,29 @@ async function downloadSubtitle(url) {
 /**
  * Machine translates a subtitle with Google Translate.
  *
+ * The target language travels with the entry, because a primary language is
+ * translated *into*: Chinese uses the viewer's OpenCC variant, any other
+ * language uses its own Google code.
+ *
  * Google already returns Traditional Chinese for a Traditional target, but it
  * does not apply the exact variant the viewer picked, so the configured OpenCC
- * pair is run afterwards when the target is a Traditional variant. That step is
- * a no-op for character conversion and only localises wording.
+ * pair is run afterwards when the target is Chinese. That step is a no-op for
+ * character conversion and only localises wording.
  *
  * @returns {{ body: string, characters: number, requests: number }}
  */
 async function translateSubtitleFile(source, cfg, handle) {
+	const targetLang = handle.targetLang || toGoogleTarget(cfg.to);
 	const result = await translateSubtitle(source, {
 		sourceLang: toGoogleSource(handle.sourceLang),
-		targetLang: toGoogleTarget(cfg.to),
+		targetLang,
 	});
 
 	let body = result.text;
-	if (TRADITIONAL_TARGETS.has(cfg.to)) {
+	// OpenCC only speaks Chinese, so the localisation pass is skipped for any
+	// other target rather than being applied to a language it does not know.
+	const chineseTarget = String(targetLang).toLowerCase().startsWith('zh');
+	if (chineseTarget && TRADITIONAL_TARGETS.has(cfg.to)) {
 		try {
 			body = convertSubtitle(result.text, { ...cfg, mode: 'always' }).text;
 		} catch {

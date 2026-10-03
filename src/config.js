@@ -13,16 +13,21 @@ const DEFAULTS = {
 	to: DEFAULT_TO,
 	mode: 'auto', // 'auto' = only convert Simplified subtitles, 'always' = always convert
 	// Languages to list, in priority order. Chinese codes are converted with
-	// OpenCC; every other language is listed untouched, in its original form.
-	langs: 'zh',
-	perLanguageLimit: 3, // how many subtitles to offer per language
+	// Languages are split into two tiers. A *primary* language is a promise: if
+	// the film has nothing in it, a machine translation is offered instead. A
+	// *secondary* language is a preference: if it is missing, it is simply
+	// absent. Chinese is converted with OpenCC; anything else is listed as it
+	// is, in its original language.
+	langs: 'zh', // primary languages, in display order
+	secondary: '', // secondary languages, shown as-is and never translated
+	perLanguageLimit: 3, // how many subtitles to offer per language, in either tier
 	provider: 'v3', // 'v3' = upstream Stremio addons, 'rest' = OpenSubtitles.com API
 	sources: 'https://opensubtitles-v3.strem.io', // upstream addons, comma or newline separated
 	apiKey: '', // OpenSubtitles.com API key
 	customDict: '',
-	// Machine translation, used only when no Chinese subtitle exists at all.
-	fallbackLangs: 'eng', // source languages to translate from, e.g. 'eng,jpn'
-	fallbackLimit: 3, // how many machine-translated candidates to offer
+	// What a primary language is machine translated *from* when the film has
+	// nothing in that language, e.g. 'eng,jpn' prefers English.
+	fallbackLangs: 'eng',
 	// Frame-rate correction, applied when a subtitle was timed for a different
 	// frame rate than the file being played. 'auto' only corrects the direction
 	// that cannot be a false positive (see src/fps.js).
@@ -34,28 +39,20 @@ const KEYMAP = {
 	to: 't',
 	mode: 'm',
 	langs: 'l',
+	secondary: 'sc',
 	perLanguageLimit: 'pl',
 	provider: 'p',
 	sources: 's',
 	apiKey: 'a',
 	customDict: 'd',
 	fallbackLangs: 'fl',
-	fallbackLimit: 'fn',
 	fpsMode: 'fm',
 };
 
 const PROVIDERS = ['v3', 'rest'];
-/** Upper bound for the configurable fallback list length. */
-const MAX_FALLBACK_LIMIT = 5;
 /** Upper bound for the per-language subtitle count. */
 const MAX_PER_LANGUAGE_LIMIT = 10;
 const FPS_MODES = ['auto', 'off', '25to23976', '23976to25'];
-
-function clampFallbackLimit(value) {
-	const number = Number(value);
-	if (!Number.isFinite(number)) return DEFAULTS.fallbackLimit;
-	return Math.min(MAX_FALLBACK_LIMIT, Math.max(1, Math.round(number)));
-}
 
 function clampPerLanguageLimit(value) {
 	const number = Number(value);
@@ -88,11 +85,11 @@ function normalizeConfig(raw) {
 	// Stored canonically so the config page's picker and the server agree on
 	// what "the same language" means, whatever spelling a source used.
 	cfg.langs = canonicalList(cfg.langs).join(',') || DEFAULTS.langs;
+	cfg.secondary = canonicalList(cfg.secondary).join(',');
 	cfg.sources = String(cfg.sources || '').trim() || DEFAULTS.sources;
 	cfg.apiKey = String(cfg.apiKey || '').trim();
 	cfg.customDict = String(cfg.customDict || '');
 	cfg.fallbackLangs = String(cfg.fallbackLangs || '').trim();
-	cfg.fallbackLimit = clampFallbackLimit(cfg.fallbackLimit);
 	cfg.perLanguageLimit = clampPerLanguageLimit(cfg.perLanguageLimit);
 	cfg.fpsMode = FPS_MODES.includes(cfg.fpsMode) ? cfg.fpsMode : DEFAULTS.fpsMode;
 	return cfg;
@@ -129,10 +126,8 @@ module.exports = {
 	DEFAULTS,
 	KEYMAP,
 	PROVIDERS,
-	MAX_FALLBACK_LIMIT,
 	MAX_PER_LANGUAGE_LIMIT,
 	FPS_MODES,
-	clampFallbackLimit,
 	clampPerLanguageLimit,
 	encodeConfig,
 	decodeConfig,

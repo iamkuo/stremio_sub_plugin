@@ -233,35 +233,28 @@
 		</div>
 		<div class="field">
 			<div class="row" style="justify-content:space-between">
-				<label>要顯示的字幕語言</label>
+				<label>主要語言</label>
 				<span class="inline-num">每種語言 <input type="number" id="perLanguageLimit" min="1" max="10" step="1"> 筆</span>
 			</div>
-			<div class="langgrid" id="langPicker"></div>
+			<div class="langgrid" id="primaryPicker"></div>
 			<input type="text" id="langs" spellcheck="false" placeholder="也可以直接輸入語言代碼，以逗號分隔">
 			<div class="hint">
-				點一下即加入或移除，選了什麼就只顯示什麼。<strong>中文</strong>用 OpenCC 轉成繁體，
-				<strong>其他語言</strong>原樣提供。同一部片的候選常有數十個版本而 Stremio 只顯示語言，
-				所以每種語言只留幾筆。
+				<strong>一定要有</strong>的語言：某一種完全找不到時，會從下面「翻譯來源」用 Google 翻一份出來。
+				點一下即加入或移除；<strong>中文</strong>用 OpenCC 轉成繁體，其他語言原樣提供。
 			</div>
 		</div>
-	</div>
-
-	<div class="card">
-		<h2>備援翻譯（Google 翻譯）</h2>
-		<p class="hint" style="margin-top:-6px">
-			影片<strong>完全找不到中文字幕</strong>時，改把下面列出的語言用 Google 翻譯成繁體。
-			翻譯只在你選了那筆字幕時才發生，瀏覽清單不會產生任何請求。
-		</p>
-		<div class="grid">
-			<div class="field">
-				<label for="fallbackLangs">備援語言（翻譯來源）</label>
-				<input type="text" id="fallbackLangs" spellcheck="false">
-				<div class="hint">逗號分隔，預設 <code>eng</code>。清空即停用。</div>
-			</div>
-			<div class="field">
-				<label for="fallbackLimit">備援字幕數量</label>
-				<input type="number" id="fallbackLimit" min="1" max="5" step="1">
-				<div class="hint">與每種語言一樣預設 3 筆，上限 5 筆。</div>
+		<div class="field">
+			<label>次要語言</label>
+			<div class="langgrid" id="secondaryPicker"></div>
+			<input type="text" id="secondary" spellcheck="false" placeholder="也可以直接輸入語言代碼，以逗號分隔">
+			<div class="hint"><strong>有就顯示、沒有就算了</strong>，不會觸發翻譯。筆數同主要語言。</div>
+		</div>
+		<div class="field">
+			<label for="fallbackLangs">翻譯來源</label>
+			<input type="text" id="fallbackLangs" spellcheck="false">
+			<div class="hint">
+				主要語言缺字幕時從這些語言翻譯過去，逗號分隔、預設 <code>eng</code>，依順序排優先。
+				清空即停用翻譯。翻譯只在你實際選了那筆字幕時才發生，瀏覽清單不會產生任何請求。
 			</div>
 		</div>
 	</div>
@@ -445,8 +438,8 @@ function readForm() {
 	state.sources = el('sources').value;
 	state.apiKey = el('apiKey').value;
 	state.langs = el('langs').value;
+	state.secondary = el('secondary').value;
 	state.fallbackLangs = el('fallbackLangs').value;
-	state.fallbackLimit = Number(el('fallbackLimit').value) || 3;
 	state.perLanguageLimit = Number(el('perLanguageLimit').value) || 3;
 	state.fpsMode = el('fpsMode').value;
 }
@@ -460,12 +453,13 @@ function writeForm() {
 	el('sources').value = state.sources;
 	el('apiKey').value = state.apiKey;
 	el('langs').value = state.langs;
+	el('secondary').value = state.secondary;
 	el('fallbackLangs').value = state.fallbackLangs;
-	el('fallbackLimit').value = state.fallbackLimit;
 	syncProviderFields();
 	el('perLanguageLimit').value = state.perLanguageLimit;
 	el('fpsMode').value = state.fpsMode;
-	renderLangPicker();
+	renderPicker('primaryPicker', 'langs', 'langs');
+	renderPicker('secondaryPicker', 'secondary', 'secondary');
 }
 
 /**
@@ -484,14 +478,18 @@ function canonicalCode(code) {
 	return value.split('-')[0];
 }
 
-function selectedLanguages() {
-	const codes = String(state.langs || '').split(/[,\s]+/).filter(Boolean).map(canonicalCode);
+function selectedLanguages(value) {
+	const codes = String(value || '').split(/[,\s]+/).filter(Boolean).map(canonicalCode);
 	return new Set(codes.filter(Boolean));
 }
-
-function renderLangPicker() {
-	const box = el('langPicker');
-	const selected = selectedLanguages();
+/**
+ * One chip per known language, in the same menu style for both tiers, so the
+ * two pickers are learned once. Clicking a chip adds or removes that language
+ * from the field it belongs to.
+ */
+function renderPicker(boxId, fieldId, stateKey) {
+	const box = el(boxId);
+	const selected = selectedLanguages(el(fieldId).value);
 	box.textContent = '';
 	for (const lang of SETTINGS.languages || []) {
 		const chip = document.createElement('button');
@@ -502,18 +500,18 @@ function renderLangPicker() {
 		who.className = 'who';
 		who.textContent = lang.name;
 		chip.append(who);
-		chip.addEventListener('click', () => toggleLanguage(lang.code));
+		chip.addEventListener('click', () => toggleLanguage(lang.code, boxId, fieldId, stateKey));
 		box.append(chip);
 	}
 }
-
-function toggleLanguage(code) {
-	const selected = selectedLanguages();
+function toggleLanguage(code, boxId, fieldId, stateKey) {
+	const input = el(fieldId);
+	const selected = selectedLanguages(input.value);
 	if (selected.has(code)) selected.delete(code);
 	else selected.add(code);
-	state.langs = [...selected].join(',');
-	el('langs').value = state.langs;
-	renderLangPicker();
+	state[stateKey] = [...selected].join(',');
+	input.value = state[stateKey];
+	renderPicker(boxId, fieldId, stateKey);
 	schedulePreview();
 }
 
@@ -679,7 +677,7 @@ function onFormChange(event) {
 	schedulePreview();
 }
 
-for (const id of ['from', 'to', 'mode', 'customDict', 'provider', 'sources', 'apiKey', 'langs', 'fallbackLangs', 'fallbackLimit']) {
+for (const id of ['from', 'to', 'mode', 'customDict', 'provider', 'sources', 'apiKey', 'langs', 'secondary', 'fallbackLangs']) {
 	el(id).addEventListener('input', onFormChange);
 	el(id).addEventListener('change', onFormChange);
 }

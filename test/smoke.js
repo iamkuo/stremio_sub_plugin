@@ -304,10 +304,10 @@ const { encodeConfig, decodeConfig } = require('../src/config');
 const { convertSubtitle, looksSimplified } = require('../src/opencc');
 const { splitSegments } = require('../src/srt');
 const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/google');
-const { clampFallbackLimit, MAX_FALLBACK_LIMIT } = require('../src/config');
+const { clampPerLanguageLimit, MAX_PER_LANGUAGE_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
-const { toGoogleSource, toGoogleTarget, toSubsenseCode } = require('../src/langs');
-	const { sourceList, addonBase, originLabel, subsenseUrl, knownSources } = require('../src/sources');
+const { toGoogleSource, toGoogleTarget, toGoogleLanguage, toSubsenseCode } = require('../src/langs');
+	const { sourceList, addonBase, originLabel, subsenseUrl, knownSources, requestedLanguages } = require('../src/sources');
 	const { rankByMatch } = require('../src/match');
 	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
 	const { parseExtras } = require('../src/extras');
@@ -394,7 +394,7 @@ function unitTests() {
 	assert.strictEqual(decodeConfig('not-a-config').to, 'twp', 'invalid config falls back to defaults');
 	assert.ok(/^[A-Za-z0-9_-]+$/.test(encoded), 'config segment must be URL safe');
 	assert.strictEqual(decodeConfig(encodeConfig({})).fallbackLangs, 'eng', 'fallback defaults to English');
-	assert.strictEqual(decodeConfig(encodeConfig({ fallbackLimit: 3 })).fallbackLimit, 3);
+	assert.strictEqual(decodeConfig(encodeConfig({ secondary: 'eng,jpn' })).secondary, 'en,ja');
 
 	// Segment detection ignores cue numbers and timing lines.
 	const { segments } = splitSegments(SIMPLIFIED_SRT);
@@ -465,11 +465,24 @@ function unitTests() {
 	assert.ok(needing.every((preset) => preset.configure.startsWith('https://')), 'each of those must link to a configure page');
 	assert.ok(presets.every((preset) => preset.label && preset.note), 'every preset needs a label and an explanation');
 
-	// The fallback list length is clamped to a sane range.
-	assert.strictEqual(clampFallbackLimit(undefined), 3, 'the default is three');
-	assert.strictEqual(clampFallbackLimit(3), 3);
-	assert.strictEqual(clampFallbackLimit(0), 1);
-	assert.strictEqual(clampFallbackLimit(99), MAX_FALLBACK_LIMIT);
+	// The per-language count is clamped to a sane range.
+	assert.strictEqual(clampPerLanguageLimit(undefined), 3, 'the default is three');
+	assert.strictEqual(clampPerLanguageLimit(0), 1);
+	assert.strictEqual(clampPerLanguageLimit(99), MAX_PER_LANGUAGE_LIMIT);
+
+	// Upstream is asked for every language the addon needs: both tiers plus the
+	// languages a primary language is translated from.
+	assert.deepStrictEqual(
+		requestedLanguages({ langs: 'zht', secondary: 'eng', fallbackLangs: 'jpn' }),
+		['zh', 'en', 'ja']
+	);
+
+	// A Google target is per language: Chinese follows the OpenCC variant, any
+	// other language uses its own code, and Cantonese is declined.
+	assert.strictEqual(toGoogleLanguage('zh', 'twp'), 'zh-TW');
+	assert.strictEqual(toGoogleLanguage('zh', 'cn'), 'zh-CN');
+	assert.strictEqual(toGoogleLanguage('jpn', 'twp'), 'ja');
+	assert.strictEqual(toGoogleLanguage('yue', 'twp'), null, 'Google cannot produce Cantonese');
 
 	// Release names are converted too, but only when they really are Simplified.
 	const nameCfg = decodeConfig(CFG);
@@ -584,10 +597,12 @@ async function httpTests() {
 	const page = await get(`/${CFG}/configure`);
 	assert.strictEqual(page.status, 200);
 	assert.ok(page.body.includes('OpenCC 轉換設定'));
-	assert.ok(page.body.includes('備援翻譯'), 'the config page must expose the fallback settings');
+	assert.ok(page.body.includes('翻譯來源'), 'the config page must expose the translation source');
+	assert.ok(page.body.includes('主要語言') && page.body.includes('次要語言'), 'the config page must expose both tiers');
 	assert.ok(page.body.includes('上游字幕外掛'), 'the upstream list must be present');
 	assert.ok(page.body.includes('sourceCheckBtn'), 'the source checker must be present');
-	assert.ok(page.body.includes('fallbackLimit'), 'the fallback count control must be present');
+	assert.ok(page.body.includes('id="secondary"'), 'the secondary language control must be present');
+	assert.ok(page.body.includes('id="primaryPicker"') && page.body.includes('id="secondaryPicker"'), 'both tiers need a picker');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');
 	assert.ok(!page.body.includes('__SETTINGS__'), 'settings must be injected into the page');
@@ -834,31 +849,70 @@ async function googleFallbackTests() {
 	assert.strictEqual(failingFile.status, 502);
 	assert.ok(failingFile.body.includes('Google 翻譯失敗'), 'the error must name the cause');
 
-	// The fallback list length defaults to three, like every other language.
+	// A translated language obeys the same per-language count as any other.
 	const defaulted = await getJson(`/${auto}/subtitles/movie/tt7777777.json`);
-	assert.strictEqual(defaulted.json.subtitles.length, 3, 'three fallback entries by default');
+	assert.strictEqual(defaulted.json.subtitles.length, 3, 'three entries per language by default');
+	assert.ok(defaulted.json.subtitles.every((sub) => sub.label.startsWith('繁體中文（Google）')));
 
-	const one = encodeConfig({
-		provider: 'v3',
-		sources: SOURCE_URL,
-		to: 'twp',
-		fallbackLangs: 'eng',
-		fallbackLimit: 1,
-	});
+	const one = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp', fallbackLangs: 'eng', perLanguageLimit: 1 });
 	assert.strictEqual((await getJson(`/${one}/subtitles/movie/tt7777777.json`)).json.subtitles.length, 1);
 
-	const capped = encodeConfig({
+	const wide = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp', fallbackLangs: 'eng', perLanguageLimit: 99 });
+	assert.strictEqual(
+		(await getJson(`/${wide}/subtitles/movie/tt7777777.json`)).json.subtitles.length,
+		10,
+		'the per-language count must be capped'
+	);
+
+	// A primary language that is not Chinese is translated into as well, using
+	// its own Google target rather than the OpenCC one.
+	const intoJapanese = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp', langs: 'ja', fallbackLangs: 'eng' });
+	const japanese = await getJson(`/${intoJapanese}/subtitles/movie/tt4444444.json`);
+	assert.strictEqual(japanese.json.subtitles.length, 1);
+	assert.strictEqual(japanese.json.subtitles[0].lang, 'ja');
+	assert.ok(japanese.json.subtitles[0].label.startsWith('日本語（Google）'));
+
+	googleCalls.length = 0;
+	const japaneseFile = await get(new URL(japanese.json.subtitles[0].url).pathname);
+	assert.strictEqual(japaneseFile.status, 200);
+	assert.strictEqual(googleCalls[googleCalls.length - 1].tl, 'ja', 'a non-Chinese primary uses its own Google target');
+
+	// The two tiers: a primary language is a promise, a secondary one is not.
+	const tiers = encodeConfig({
 		provider: 'v3',
 		sources: SOURCE_URL,
 		to: 'twp',
+		langs: 'zh',
+		secondary: 'eng',
 		fallbackLangs: 'eng',
-		fallbackLimit: 99,
 	});
-	assert.strictEqual(
-		(await getJson(`/${capped}/subtitles/movie/tt7777777.json`)).json.subtitles.length,
-		5,
-		'the limit must be capped'
-	);
+
+	// Only English exists upstream: Chinese is promised and therefore translated,
+	// while English is a preference that happens to be satisfied.
+	const both = await getJson(`/${tiers}/subtitles/movie/tt4444444.json`);
+	const bothIds = both.json.subtitles.map((sub) => sub.id);
+	assert.ok(bothIds.some((id) => id.startsWith('machine:zh:')), 'a missing primary language must be translated');
+	assert.ok(bothIds.some((id) => id.startsWith('native:')), 'a satisfied secondary language must be listed');
+
+	// Nothing exists in the secondary language: it is absent, and — the point of
+	// the distinction — it is not translated either.
+	const withSecondary = encodeConfig({
+		provider: 'v3',
+		sources: SOURCE_URL,
+		to: 'twp',
+		langs: 'zh',
+		secondary: 'ja',
+		fallbackLangs: 'eng',
+	});
+	const absent = await getJson(`/${withSecondary}/subtitles/movie/tt4444444.json`);
+	assert.ok(absent.json.subtitles.every((sub) => !sub.id.startsWith('machine:ja:')), 'a secondary language must never be translated');
+	assert.ok(absent.json.subtitles.some((sub) => sub.id.startsWith('machine:zh:')), 'the primary language still is');
+
+	// A primary language that already has subtitles is left alone: the promise is
+	// kept by what exists, so nothing is translated.
+	const satisfied = await getJson(`/${tiers}/subtitles/movie/tt1111111.json`);
+	assert.strictEqual(satisfied.json.subtitles.length, 1);
+	assert.ok(satisfied.json.subtitles[0].id.startsWith('opencc:'), 'an existing primary language must not be translated');
 	console.log('google    ok');
 }
 

@@ -18,7 +18,7 @@
  * languages for machine translation.
  */
 
-const { normalizeLang, toRestCode, toSubsenseCode } = require('./langs');
+const { normalizeLang, canonicalLang, toRestCode, toSubsenseCode } = require('./langs');
 
 const DEFAULT_SOURCE = 'https://opensubtitles-v3.strem.io';
 const REST_BASE = 'https://api.opensubtitles.com/api/v1';
@@ -41,26 +41,23 @@ function langList(value) {
 		.filter(Boolean);
 }
 
-/** True when `lang` appears in an explicit allow list. */
-function langInList(list, lang) {
-	const wanted = langList(list);
-	const normalized = normalizeLang(lang);
-	if (!normalized || !wanted.length) return false;
-	return wanted.includes(normalized);
-}
-
-/** True when `lang` is an accepted Chinese source subtitle. */
-function langAllowed(cfg, lang) {
-	const wanted = langList(cfg.langs);
-	const normalized = normalizeLang(lang);
-	if (!normalized) return false;
-	if (!wanted.length) return CHINESE_LANGS.has(normalized);
-	return wanted.includes(normalized);
-}
-
-/** True when `lang` may be machine translated as a fallback. */
-function fallbackAllowed(cfg, lang) {
-	return langInList(cfg.fallbackLangs, lang);
+/**
+ * Every language the addon needs from upstream.
+ *
+ * That is the languages it lists — primary and secondary alike — plus the ones
+ * a primary language is translated from. Asking a source for less would leave a
+ * translation with nothing to translate, or a secondary language that is simply
+ * never offered.
+ */
+function requestedLanguages(cfg) {
+	const codes = [];
+	for (const value of [cfg.langs, cfg.secondary, cfg.fallbackLangs]) {
+		for (const code of langList(value)) {
+			const canonical = canonicalLang(code) || code;
+			if (!codes.includes(canonical)) codes.push(canonical);
+		}
+	}
+	return codes;
 }
 
 /**
@@ -139,7 +136,7 @@ const KNOWN_SOURCES = [
 		id: 'subsense',
 		label: 'SubSense',
 		note: '免金鑰聚合 OpenSubtitles／SubDL／SubSource 等 10 個來源；網址已依你的語言設定產生',
-		build: (cfg) => subsenseUrl(['chi', ...langList(cfg.fallbackLangs)]),
+		build: (cfg) => subsenseUrl(['chi', ...requestedLanguages(cfg)]),
 		configure: `${SUBSENSE_BASE}/configure`,
 	},
 	{
@@ -249,10 +246,17 @@ async function listFromAddon(base, type, id, extras) {
 		}));
 }
 
-/** Builds the REST `languages` query from both allow lists. */
+/** Builds the REST `languages` query from every requested language. */
 function restLanguages(cfg) {
 	const codes = new Set();
-	for (const code of [...langList(cfg.langs), ...langList(cfg.fallbackLangs)]) {
+	for (const code of requestedLanguages(cfg)) {
+		if (code === 'zh') {
+			// The API distinguishes Simplified from Traditional and has no plain
+			// "Chinese", so ask for both and let the conversion sort it out.
+			codes.add('zh-cn');
+			codes.add('zh-tw');
+			continue;
+		}
 		const mapped = toRestCode(code);
 		if (mapped) codes.add(mapped);
 	}
@@ -382,8 +386,6 @@ module.exports = {
 	resolveDownloadLink,
 	normalizeLang,
 	langList,
-	langInList,
-	langAllowed,
-	fallbackAllowed,
+	requestedLanguages,
 	restLanguages,
 };

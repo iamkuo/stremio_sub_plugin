@@ -86,6 +86,20 @@ const GOOGLE_TARGETS = {
 	jp: 'ja',
 };
 
+/**
+ * Canonical code -> the ISO 639-2/B spelling, for services that want the
+ * three-letter form. Derived from the source map by preferring its three-letter
+ * key, so the codes are declared in exactly one place.
+ */
+const BIBLIOGRAPHIC_CODES = (() => {
+	const map = {};
+	for (const [key, value] of Object.entries(GOOGLE_SOURCES)) {
+		const current = map[value];
+		if (!current || (key.length === 3 && current.length !== 3)) map[value] = key;
+	}
+	return map;
+})();
+
 /** Stremio language code -> OpenSubtitles.com REST `languages` code. */
 const REST_CODES = {
 	eng: 'en', en: 'en',
@@ -146,7 +160,9 @@ function toSubsenseCode(lang) {
 	const normalized = normalizeLang(lang);
 	if (!normalized) return null;
 	if (CHINESE_CODES.has(normalized)) return 'chi';
-	return normalized.split('-')[0];
+	// Callers hand over canonical codes as often as Stremio ones, and SubSense
+	// wants the three-letter form either way.
+	return BIBLIOGRAPHIC_CODES[canonicalLang(normalized)] || normalized.split('-')[0];
 }
 
 /**
@@ -264,6 +280,30 @@ function toGoogleTarget(locale) {
 	return GOOGLE_TARGETS[locale] || 'zh-TW';
 }
 
+/**
+ * Canonical codes Google can produce as a *target*.
+ *
+ * Taken from the source map, so it inherits its deliberate gaps — Cantonese is
+ * absent there because Google cannot translate it.
+ */
+const GOOGLE_TARGET_LANGS = new Set(Object.values(GOOGLE_SOURCES));
+
+/**
+ * Google target code for a canonical language, or null when Google cannot
+ * produce that language at all — the caller then declines to offer an entry
+ * rather than handing the viewer a link that can only fail.
+ *
+ * Chinese is the special case: the exact variant is the viewer's OpenCC choice,
+ * so the configured locale decides between `zh-CN` and `zh-TW`. Every other
+ * language is already keyed by its Google code.
+ */
+function toGoogleLanguage(code, openccLocale) {
+	const canonical = canonicalLang(code);
+	if (!canonical) return null;
+	if (canonical === 'zh') return toGoogleTarget(openccLocale);
+	return GOOGLE_TARGET_LANGS.has(canonical) ? canonical : null;
+}
+
 /** OpenSubtitles.com REST language code for a Stremio code. */
 function toRestCode(lang) {
 	return lookup(REST_CODES, lang);
@@ -277,6 +317,8 @@ module.exports = {
 	toSubsenseCode,
 	toGoogleSource,
 	toGoogleTarget,
+	toGoogleLanguage,
+	GOOGLE_TARGET_LANGS,
 	toRestCode,
 	GOOGLE_SOURCES,
 	GOOGLE_TARGETS,
