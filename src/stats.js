@@ -32,6 +32,8 @@ const counters = {
 	cacheMisses: 0,
 	cacheCharactersSaved: 0,
 	cacheEntries: 0,
+	fpsCorrections: 0,
+	lastFpsFactor: null,
 	lastTranslationAt: null,
 	lastError: null,
 };
@@ -76,6 +78,17 @@ function recordCacheEntries(size) {
 	counters.cacheEntries = size;
 }
 
+/**
+ * One subtitle whose timing was rescaled for a different frame rate. Worth
+ * surfacing: a correction that fires on subtitles that were already fine would
+ * be silently breaking them, and this counter is how that would show up.
+ */
+function recordFpsCorrection(factor) {
+	counters.fpsCorrections += 1;
+	counters.lastFpsFactor = Math.round(factor * 100000) / 100000;
+	emitChange();
+}
+
 /** A JSON-safe view of everything the dashboard shows. */
 function snapshot() {
 	const requests = counters.cacheHits + counters.cacheMisses;
@@ -97,6 +110,10 @@ function snapshot() {
 			errors: counters.translationErrors,
 			lastTranslationAt: counters.lastTranslationAt,
 			lastError: counters.lastError,
+		},
+		timing: {
+			fpsCorrections: counters.fpsCorrections,
+			lastFpsFactor: counters.lastFpsFactor,
 		},
 	};
 }
@@ -146,6 +163,7 @@ module.exports = {
 	recordCacheHit,
 	recordCacheMiss,
 	recordCacheEntries,
+	recordFpsCorrection,
 	createWatch,
 	getWatch,
 	WATCH_TTL,

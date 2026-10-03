@@ -9,7 +9,9 @@ const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
+const { parseExtras, recordRequest, recentRequests } = require('./extras');
 const { sourceList, fetchManifest, resourceNames, listFromAddon, knownSources } = require('./sources');
+const { LANGUAGE_OPTIONS } = require('./langs');
 const stats = require('./stats');
 const SIMPLIFIED_CHARS = require('./data/simplified-chars');
 
@@ -20,7 +22,13 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const CONFIGURE_HTML = fs
 	.readFileSync(path.join(PUBLIC_DIR, 'configure.html'), 'utf8')
 	.replace('/*__SETTINGS__*/null', () =>
-		JSON.stringify({ defaults: DEFAULTS, locales: LOCALES, pairs: PAIRS, simplifiedChars: SIMPLIFIED_CHARS })
+		JSON.stringify({
+			defaults: DEFAULTS,
+			locales: LOCALES,
+			pairs: PAIRS,
+			languages: LANGUAGE_OPTIONS,
+			simplifiedChars: SIMPLIFIED_CHARS,
+		})
 	);
 
 function baseUrlFor(req) {
@@ -61,9 +69,14 @@ function readBody(req, limit = 64 * 1024) {
 	});
 }
 
-async function handleSubtitlesRequest(req, res, config, type, id, baseUrl) {
+async function handleSubtitlesRequest(req, res, config, type, id, baseUrl, rawExtras) {
+	// The extras decide which subtitle belongs to the file being played, so they
+	// are recorded before the handler runs — including when it throws, because a
+	// failed request is exactly when knowing what the client sent matters.
+	const extras = parseExtras(rawExtras);
+	recordRequest({ path: req.url, extras, type, id, config });
 	try {
-		const result = await handleSubtitles({ type, id, config, baseUrl });
+		const result = await handleSubtitles({ type, id, config, baseUrl, extras });
 		sendJson(res, 200, result);
 	} catch (error) {
 		console.error(`[subtitles] ${type}/${id} failed:`, error.message);
@@ -105,6 +118,7 @@ async function handleConfigApi(req, res, baseUrl) {
 	sendJson(res, 200, {
 		config: encoded,
 		settings: cfg,
+		languages: LANGUAGE_OPTIONS,
 		manifestPath: `/${encoded}/manifest.json`,
 		configurePath: `/${encoded}/configure`,
 	});
@@ -308,7 +322,11 @@ const server = http.createServer(async (req, res) => {
 
 	const baseUrl = baseUrlFor(req);
 	const url = new URL(req.url, baseUrl);
-	const segments = url.pathname.split('/').filter(Boolean).map((part) => decodeURIComponent(part));
+	// Both forms are kept: routing wants decoded segments, while the extras
+	// segment must stay encoded so an `&` inside a filename is not mistaken for
+	// a separator between arguments.
+	const rawSegments = url.pathname.split('/').filter(Boolean);
+	const segments = rawSegments.map((part) => decodeURIComponent(part));
 
 	try {
 		// POST endpoints for the configuration page.
@@ -320,9 +338,6 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'check') {
 			return handleSourcesCheck(req, res);
-		}
-		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'presets') {
-			return handleSourcesPresets(req, res);
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'presets') {
 			return handleSourcesPresets(req, res);
@@ -340,6 +355,12 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (segments[0] === 'health') {
 			return sendJson(res, 200, { status: 'ok', manifest: `${baseUrl}/manifest.json` });
+		}
+
+		// What the client actually sends on a subtitle request, newest first.
+		// This is the diagnostic behind the frame-rate and release matching.
+		if (req.method === 'GET' && segments[0] === 'api' && segments[1] === 'requests') {
+			return sendJson(res, 200, { ok: true, requests: recentRequests() });
 		}
 
 		if (segments.length === 1 && segments[0] === 'logo.png') {
@@ -386,7 +407,8 @@ const server = http.createServer(async (req, res) => {
 			const config = resourceIndex === 1 ? segments[0] : '';
 			const type = segments[resourceIndex + 1];
 			const id = (segments[resourceIndex + 2] || '').replace(/\.json$/i, '');
-			if (type && id) return handleSubtitlesRequest(req, res, config, type, id, baseUrl);
+			const extras = (rawSegments[resourceIndex + 3] || '').replace(/\.json$/i, '');
+			if (type && id) return handleSubtitlesRequest(req, res, config, type, id, baseUrl, extras);
 		}
 
 		sendJson(res, 404, { error: 'not found' });

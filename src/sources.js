@@ -209,9 +209,26 @@ async function fetchManifest(base) {
 	return manifest;
 }
 
+/**
+ * The extra arguments that identify the file being played, as a path segment.
+ *
+ * Stremio hands these to us; upstream addons may be able to use them (the
+ * OpenSubtitles v3 addon matches on the hash when it is given one), so they are
+ * passed along rather than kept to ourselves.
+ */
+function extraQuery(extras) {
+	if (!extras) return '';
+	const params = new URLSearchParams();
+	if (extras.videoHash) params.set('videoHash', extras.videoHash);
+	if (extras.videoSize) params.set('videoSize', extras.videoSize);
+	if (extras.filename) params.set('filename', extras.filename);
+	const query = params.toString();
+	return query ? `/${query}` : '';
+}
+
 /** Asks one upstream addon for its subtitle list. */
-async function listFromAddon(base, type, id) {
-	const payload = await fetchJson(`${base}/subtitles/${type}/${sanitizeId(id)}.json`);
+async function listFromAddon(base, type, id, extras) {
+	const payload = await fetchJson(`${base}/subtitles/${type}/${sanitizeId(id)}${extraQuery(extras)}.json`);
 	const subtitles = (payload && payload.subtitles) || [];
 	const origin = originLabel(base);
 
@@ -246,23 +263,8 @@ function restLanguages(cfg) {
 	return [...codes].join(',');
 }
 
-async function listFromRest(cfg, type, id) {
-	if (!cfg.apiKey) {
-		throw new Error('OpenSubtitles.com 需要 API Key，請在設定頁填入（或在設定頁改用免金鑰的來源）。');
-	}
-
-	const [imdbId, season, episode] = String(id).split(':');
-	const numericId = String(imdbId).replace(/^tt/, '');
-
-	const params = new URLSearchParams({ languages: restLanguages(cfg) });
-	if (type === 'series') {
-		params.set('parent_imdb_id', numericId);
-		if (season) params.set('season_number', String(Number(season)));
-		if (episode) params.set('episode_number', String(Number(episode)));
-	} else {
-		params.set('imdb_id', numericId);
-	}
-
+/** One `/subtitles` search, mapped into this addon's internal shape. */
+async function restSearch(cfg, params) {
 	const payload = await fetchJson(`${REST_BASE}/subtitles?${params.toString()}`, {
 		headers: { 'Api-Key': cfg.apiKey },
 	});
@@ -280,6 +282,50 @@ async function listFromRest(cfg, type, id) {
 			origin: 'opensubtitles',
 		});
 	}
+	return results;
+}
+
+async function listFromRest(cfg, type, id, extras) {
+	if (!cfg.apiKey) {
+		throw new Error('OpenSubtitles.com 需要 API Key，請在設定頁填入（或在設定頁改用免金鑰的來源）。');
+	}
+
+	const [imdbId, season, episode] = String(id).split(':');
+	const numericId = String(imdbId).replace(/^tt/, '');
+	const languages = restLanguages(cfg);
+
+	const queries = [];
+
+	// A hash match is the strongest evidence there is that a subtitle was made
+	// for this exact file, and therefore that its timing lines up. It is asked
+	// for first so that when the same file also comes back from the title
+	// search, the flagged copy is the one that survives de-duplication.
+	const hash = extras && /^[0-9a-f]{16}$/i.test(String(extras.videoHash || '')) ? String(extras.videoHash) : '';
+	if (hash) {
+		const params = new URLSearchParams({ languages, moviehash: hash });
+		queries.push(restSearch(cfg, params).then((items) => items.map((item) => ({ ...item, hashMatch: true }))));
+	}
+
+	const params = new URLSearchParams({ languages });
+	if (type === 'series') {
+		params.set('parent_imdb_id', numericId);
+		if (season) params.set('season_number', String(Number(season)));
+		if (episode) params.set('episode_number', String(Number(episode)));
+	} else {
+		params.set('imdb_id', numericId);
+	}
+	queries.push(restSearch(cfg, params));
+
+	const settled = await Promise.allSettled(queries);
+	const results = [];
+	let failure = null;
+	for (const result of settled) {
+		if (result.status === 'fulfilled') results.push(...result.value);
+		else failure = failure || result.reason;
+	}
+	// Only the title search failing is fatal; a hash search with no match is a
+	// normal outcome, not an error.
+	if (!results.length && settled[settled.length - 1].status === 'rejected') throw failure;
 	return results;
 }
 
@@ -301,14 +347,14 @@ async function resolveDownloadLink(cfg, fileId) {
  * concatenated; one slow or broken source must not hold back the others, so
  * failures are logged and skipped rather than thrown.
  */
-async function listSubtitles(cfg, type, id) {
+async function listSubtitles(cfg, type, id, extras) {
 	if (!['movie', 'series'].includes(type)) return [];
-	if (cfg.provider === 'rest') return listFromRest(cfg, type, id);
+	if (cfg.provider === 'rest') return listFromRest(cfg, type, id, extras);
 
 	const bases = sourceList(cfg.sources);
 	if (!bases.length) return [];
 
-	const settled = await Promise.allSettled(bases.map((base) => listFromAddon(base, type, id)));
+	const settled = await Promise.allSettled(bases.map((base) => listFromAddon(base, type, id, extras)));
 	const items = [];
 	settled.forEach((result, index) => {
 		if (result.status === 'fulfilled') {

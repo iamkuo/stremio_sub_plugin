@@ -92,6 +92,19 @@
 	.preset .who { color: var(--accent); }
 	.preset .act { color: var(--muted); font-size: 11.5px; }
 	.preset:hover .act { color: var(--text); }
+	.preset.on { border-color: var(--accent); background: rgba(122, 162, 247, 0.16); }
+	.preset.on .who { color: var(--text); font-weight: 600; }
+	.langgrid { display: flex; flex-wrap: wrap; gap: 6px; max-height: 190px; overflow-y: auto; padding: 4px 2px; }
+	.langgrid .preset { padding: 4px 10px; font-size: 12px; }
+	.reqline {
+		display: flex; gap: 10px; align-items: baseline;
+		padding: 6px 0; border-bottom: 1px solid var(--line);
+		font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		word-break: break-all;
+	}
+	.reqline:last-child { border-bottom: none; }
+	.reqline .when { color: var(--muted); flex: none; }
+	.reqline .what { color: var(--accent); flex: none; }
 	pre.output {
 		background: var(--panel-2);
 		border: 1px solid var(--line);
@@ -222,9 +235,22 @@
 			<div class="hint">於 opensubtitles.com 免費註冊後，在個人設定頁的 API 區段取得。免費方案每日下載次數有限。</div>
 		</div>
 		<div class="field">
-			<label for="langs">接受的字幕語言代碼</label>
-			<input type="text" id="langs" spellcheck="false">
-			<div class="hint">以逗號分隔。v3 來源的中文代碼為 <code>zht</code>，REST 來源為 <code>zh-cn</code>／<code>zh-tw</code>。</div>
+			<label>要顯示的字幕語言</label>
+			<div class="langgrid" id="langPicker"></div>
+			<input type="text" id="langs" spellcheck="false" placeholder="也可以直接輸入語言代碼，以逗號分隔">
+			<div class="hint">
+				點一下即加入或移除。選了什麼就只顯示什麼：<strong>中文</strong>會用 OpenCC 轉成繁體，
+				<strong>其他語言</strong>原樣提供（不翻譯、不轉換，只修正編碼）。
+				預設只選中文；要讓這個外掛成為唯一的字幕來源，把常用的語言一起選起來即可。
+			</div>
+		</div>
+		<div class="field">
+			<label for="perLanguageLimit">每種語言顯示幾筆</label>
+			<input type="number" id="perLanguageLimit" min="1" max="10" step="1">
+			<div class="hint">
+				同一部片的候選常有數十個版本，而 Stremio 的清單只顯示語言、無法分辨版本，
+				因此每種語言只留幾筆。預設 3 筆。
+			</div>
 		</div>
 	</div>
 
@@ -247,6 +273,28 @@
 	</div>
 
 	<div class="card">
+		<h2>時間軸校正</h2>
+		<p class="hint" style="margin-top:-6px">
+			字幕的時間軸是跟著<strong>特定版本</strong>走的。如果字幕是為 25fps 的版本製作、而你播的是 23.976fps 的檔案，
+			就會出現「開頭還好、越看越偏」的漸進式不同步——這類誤差是固定倍率，算得出來。
+		</p>
+		<div class="field">
+			<label for="fpsMode">校正方式</label>
+			<select id="fpsMode">
+				<option value="auto">自動（只修正能確定的情況）</option>
+				<option value="off">關閉</option>
+				<option value="25to23976">字幕是 25fps → 影片是 23.976fps（拉長 4.3%）</option>
+				<option value="23976to25">字幕是 23.976fps → 影片是 25fps（縮短 4.3%）</option>
+			</select>
+			<div class="hint">
+				「自動」只在<strong>不會誤判</strong>時才動手：字幕的版本名稱明確寫了 <code>PAL</code>／<code>25fps</code>，
+				或字幕長度超出影片片長約 4.3%（正確的字幕不可能超出片尾）。
+				反向的情況會和「字幕本來就比較早結束」混淆（片長只精確到分鐘），請用下面的手動選項。
+			</div>
+		</div>
+	</div>
+
+	<div class="card">
 		<h2>快取與翻譯統計</h2>
 		<p class="hint" style="margin-top:-6px" id="dashHint">連線中…</p>
 		<div id="dashBody" hidden>
@@ -258,7 +306,24 @@
 		</div>
 		<div class="hint">
 			這些數字是<strong>本服務啟動以來</strong>的統計，重新部署後會歸零。頁面由伺服器主動推送更新，
-			不會輪詢。
+				不會輪詢。
+		</div>
+	</div>
+
+	<div class="card">
+		<h2>最近收到的字幕請求</h2>
+		<p class="hint" style="margin-top:-6px">
+			Stremio 在要求字幕時，會附上正在播放的檔案資訊（檔名、檔案雜湊、檔案大小）。
+			這些資訊決定了「哪一筆字幕才是你這個版本」，所以這裡把它們照實列出來，
+			而不是假設客戶端一定送了。
+		</p>
+		<div id="requestLog"><div class="hint">載入中…</div></div>
+		<div class="row" style="margin-top:14px">
+			<button class="btn secondary" id="requestRefreshBtn" type="button">重新整理</button>
+		</div>
+		<div class="hint">
+			只在記憶體中保留最近 20 筆，重新部署即清空。若這裡一直沒有出現 <code>filename</code>，
+			表示你的 Stremio 版本不會傳送它，版本比對就只能依賴標籤標記。
 		</div>
 	</div>
 
@@ -348,6 +413,8 @@ function readForm() {
 	state.langs = el('langs').value;
 	state.fallbackLangs = el('fallbackLangs').value;
 	state.fallbackLimit = Number(el('fallbackLimit').value) || 1;
+	state.perLanguageLimit = Number(el('perLanguageLimit').value) || 3;
+	state.fpsMode = el('fpsMode').value;
 }
 
 function writeForm() {
@@ -363,6 +430,98 @@ function writeForm() {
 	el('fallbackLangs').value = state.fallbackLangs;
 	el('fallbackLimit').value = state.fallbackLimit;
 	syncProviderFields();
+	el('perLanguageLimit').value = state.perLanguageLimit;
+	el('fpsMode').value = state.fpsMode;
+	renderLangPicker();
+}
+
+/**
+ * The language picker.
+ *
+ * Codes are shown and stored in canonical form (`zh`, `en`) so the several
+ * spellings a source may use for one language are a single chip, rather than
+ * three chips that look like three different languages.
+ */
+const CHINESE_CODES = new Set(['zho', 'chi', 'zh', 'zht', 'chs', 'cht', 'cn', 'tw', 'hk']);
+
+function canonicalCode(code) {
+	const value = String(code || '').toLowerCase().replace(/_/g, '-').trim();
+	if (!value) return '';
+	if (CHINESE_CODES.has(value) || value.startsWith('zh-')) return 'zh';
+	return value.split('-')[0];
+}
+
+function selectedLanguages() {
+	const codes = String(state.langs || '').split(/[,\s]+/).filter(Boolean).map(canonicalCode);
+	return new Set(codes.filter(Boolean));
+}
+
+function renderLangPicker() {
+	const box = el('langPicker');
+	const selected = selectedLanguages();
+	box.textContent = '';
+	for (const lang of SETTINGS.languages || []) {
+		const chip = document.createElement('button');
+		chip.type = 'button';
+		chip.className = selected.has(lang.code) ? 'preset on' : 'preset';
+		chip.title = `語言代碼 ${lang.code}`;
+		const who = document.createElement('span');
+		who.className = 'who';
+		who.textContent = lang.name;
+		chip.append(who);
+		chip.addEventListener('click', () => toggleLanguage(lang.code));
+		box.append(chip);
+	}
+}
+
+function toggleLanguage(code) {
+	const selected = selectedLanguages();
+	if (selected.has(code)) selected.delete(code);
+	else selected.add(code);
+	state.langs = [...selected].join(',');
+	el('langs').value = state.langs;
+	renderLangPicker();
+	schedulePreview();
+}
+
+/**
+ * Shows what the client actually sent on recent subtitle requests. The file
+ * name and hash are what tie a subtitle to the copy being played, so it is
+ * worth knowing whether they arrive at all rather than assuming they do.
+ */
+async function loadRequests() {
+	const box = el('requestLog');
+	try {
+		const data = await (await fetch('api/requests')).json();
+		const rows = data.requests || [];
+		box.textContent = '';
+		if (!rows.length) {
+			const empty = document.createElement('div');
+			empty.className = 'hint';
+			empty.textContent = '還沒有收到任何字幕請求。在 Stremio 播放任一影片後，再回來按「重新整理」。';
+			box.append(empty);
+			return;
+		}
+		for (const row of rows) {
+			const line = document.createElement('div');
+			line.className = 'reqline';
+			const when = document.createElement('span');
+			when.className = 'when';
+			when.textContent = new Date(row.at).toLocaleTimeString();
+			const what = document.createElement('span');
+			what.className = 'what';
+			what.textContent = `${row.type}/${row.id}`;
+			const rest = document.createElement('span');
+			const extras = row.extras || {};
+			rest.textContent = row.keys && row.keys.length
+				? row.keys.map((key) => `${key}=${extras[key]}`).join('  ')
+				: '（沒有附帶任何參數）';
+			line.append(when, what, rest);
+			box.append(line);
+		}
+	} catch {
+		box.textContent = '讀取失敗。';
+	}
 }
 
 /** Appends a URL to the upstream list unless it is already there. */
@@ -595,6 +754,11 @@ function renderStats(snapshot) {
 			`${formatNumber(translation.characters)} 字元 ・ ${formatNumber(translation.requests)} 次 Google 請求`
 		),
 		statTile('翻譯錯誤次數', formatNumber(translation.errors), translation.lastError || '無'),
+		statTile(
+			'時間軸校正',
+			`${formatNumber((snapshot.timing || {}).fpsCorrections)} 個字幕`,
+			(snapshot.timing || {}).lastFpsFactor ? `最近套用倍率 ${(snapshot.timing || {}).lastFpsFactor}` : '尚未觸發'
+		),
 		statTile('服務啟動時間', formatDuration(snapshot.uptimeSeconds), '重新部署後統計會歸零'),
 	].join('');
 }
@@ -678,6 +842,7 @@ el('copyBtn').addEventListener('click', async () => {
 writeForm();
 refreshLinks();
 loadPresets();
+loadRequests();
 refreshPreview();
 startStats();
 </script>

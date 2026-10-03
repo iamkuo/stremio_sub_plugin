@@ -7,6 +7,7 @@ const { toGoogleSource, toGoogleTarget } = require('./langs');
 const { resolveDownloadLink } = require('./sources');
 const { decodeToken } = require('./token');
 const stats = require('./stats');
+const { lastCueEnd, scaleTimings, detectFpsFactor } = require('./fps');
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const CACHE_LIMIT = 200;
@@ -98,6 +99,18 @@ async function translateSubtitleFile(source, cfg, handle) {
 	return { body, characters: result.characters, requests: result.requests };
 }
 
+/** Frame-rate factor to apply to one subtitle, or 1 for none. */
+function fpsFactorFor(cfg, handle, source) {
+	if (cfg.fpsMode === 'off') return 1;
+	return detectFpsFactor({
+		mode: cfg.fpsMode,
+		subName: handle.name,
+		videoName: handle.videoName,
+		lastCueSeconds: handle.runtimeSeconds ? lastCueEnd(source) : 0,
+		runtimeSeconds: handle.runtimeSeconds,
+	}).factor;
+}
+
 /**
  * Serves one converted or translated subtitle file.
  *
@@ -145,6 +158,14 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 		}
 	} else {
 		body = convertSubtitle(source, cfg).text;
+	}
+
+	// Timing correction applies to every path — converted, translated or served
+	// untouched — because it is about when the words appear, not what they say.
+	const factor = fpsFactorFor(cfg, handle, source);
+	if (factor !== 1) {
+		body = scaleTimings(body, factor);
+		stats.recordFpsCorrection(factor);
 	}
 
 	const result = {

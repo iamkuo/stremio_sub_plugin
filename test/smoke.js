@@ -109,6 +109,28 @@ const mockSource = http.createServer((req, res) => {
 		return;
 	}
 
+	// Answers only when it is told which file is playing, so a test can prove
+	// the addon forwards the file's identity upstream instead of keeping it.
+	if (/\/subtitles\/[^/]+\/tt2020202/.test(req.url)) {
+		const forwarded = req.url.includes('videoHash=');
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(
+			JSON.stringify({
+				subtitles: forwarded
+					? [
+							{
+								id: 'forwarded',
+								url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111`,
+								lang: 'zht',
+								subtitleFileName: 'Forwarded.2010.1080p.BluRay.x264-GRP.srt',
+							},
+						]
+					: [],
+			})
+		);
+		return;
+	}
+
 	const match = /\/subtitles\/[^/]+\/([^/.]+)/.exec(req.url);
 	const id = match && match[1];
 	const file = MOCK_IDS[id];
@@ -206,9 +228,30 @@ const mockSource2 = http.createServer((req, res) => {
 				},
 			],
 		});
-		return;
-	}
-	if (req.url.startsWith('/subtitles/movie/tt9999999')) {
+			return;
+		}
+		if (req.url.startsWith('/subtitles/movie/tt1010101')) {
+			// One film, two languages: the Chinese entry must be converted, the
+			// English one served untouched.
+			json({
+				subtitles: [
+					{
+						id: 'zh7',
+						url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111`,
+						lang: 'zht',
+						subtitleFileName: 'Coco.2017.1080p.WEB-DL.srt',
+					},
+					{
+						id: 'en7',
+						url: `http://127.0.0.1:${FILE_PORT}/download/tt4444444`,
+						lang: 'eng',
+						subtitleFileName: 'Coco.2017.1080p.WEB-DL.eng.srt',
+					},
+				],
+			});
+			return;
+		}
+		if (req.url.startsWith('/subtitles/movie/tt9999999')) {
 		json({
 			subtitles: [
 				{
@@ -264,11 +307,15 @@ const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/goog
 const { clampFallbackLimit, MAX_FALLBACK_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
 const { toGoogleSource, toGoogleTarget, toSubsenseCode } = require('../src/langs');
-const { sourceList, addonBase, originLabel, subsenseUrl, knownSources } = require('../src/sources');
+	const { sourceList, addonBase, originLabel, subsenseUrl, knownSources } = require('../src/sources');
+	const { rankByMatch } = require('../src/match');
+	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
+	const { parseExtras } = require('../src/extras');
 	const {
 		composeLabel,
 		releaseLabel,
 		traditionalName,
+		rankAndPick,
 		disambiguateLabels,
 		withOrigin,
 		RELEASE_LABEL_LIMIT,
@@ -432,6 +479,90 @@ function unitTests() {
 		traditionalName('Inception.2010.1080p.BluRay.x264-AMIABLE', nameCfg),
 		'Inception.2010.1080p.BluRay.x264-AMIABLE'
 	);
+
+	// Release matching: the film title is carried by every candidate and must
+	// not count as evidence, while a rare release tag must.
+	const candidates = [
+		{ name: 'Inception.2010.CAM.Xvid-LKRG.srt' },
+		{ name: 'Inception.2010.TS.V2.XVID.FEEL-FREE.srt' },
+		{ name: 'Inception.2010.1080p.BluRay.x264-AMIABLE.srt' },
+		{ name: 'Inception.2010.720p.BluRay.x264-CROSSBOW.srt' },
+	];
+	const ranked = rankByMatch(candidates, 'Inception.2010.1080p.BluRay.x264-AMIABLE.mkv');
+	assert.ok(ranked[0].item.name.includes('AMIABLE'), 'the matching release must rank first');
+	assert.strictEqual(ranked[0].distinct, true, 'a rare shared release tag is a real match');
+	const cam = ranked.find((entry) => entry.item.name.includes('CAM'));
+	assert.strictEqual(cam.distinct, false, 'a CAM rip shares only the title and must not pass as a match');
+	assert.ok(ranked.indexOf(cam) > 0, 'the CAM rip must rank below the matching release');
+	assert.ok(
+		rankByMatch(candidates, '').every((entry) => entry.distinct === false),
+		'nothing may be marked as a match when the client sent no filename'
+	);
+
+	// A hash match is a subtitle made for this exact file, so it outranks any
+	// amount of release-name similarity.
+	const withHash = rankAndPick(
+		[
+			{ id: 'name-match', name: 'Inception.2010.1080p.BluRay.x264-AMIABLE.srt' },
+			{ id: 'hash-match', name: 'Some.Other.Cut.srt', hashMatch: true },
+		],
+		{ filename: 'Inception.2010.1080p.BluRay.x264-AMIABLE.mkv' },
+		2
+	);
+	assert.strictEqual(withHash[0].item.id, 'hash-match', 'a hash match must come first');
+	assert.strictEqual(withHash[0].best, true);
+	assert.strictEqual(withHash[1].best, false, 'only one entry may carry the mark');
+
+	// With a single candidate there is nothing to choose between, so the mark
+	// would carry no information.
+	const lone = rankAndPick(
+		[{ id: 'only', name: 'Inception.2010.1080p.BluRay.x264-AMIABLE.srt' }],
+		{ filename: 'Inception.2010.1080p.BluRay.x264-AMIABLE.mkv' },
+		3
+	);
+	assert.strictEqual(lone[0].best, false, 'a lone candidate must not be marked');
+
+	// Frame-rate correction.
+	assert.strictEqual(scaleTimings('00:00:10,000 --> 00:00:12,000\nhi', 2), '00:00:20,000 --> 00:00:24,000\nhi');
+	assert.strictEqual(lastCueEnd('1\n00:00:10,000 --> 00:01:40,500\nhi'), 100.5);
+	// A subtitle that overruns a 100 minute film by the frame-rate gap.
+	const overrun = detectFpsFactor({ mode: 'auto', lastCueSeconds: 6256, runtimeSeconds: 6000 });
+	assert.strictEqual(overrun.reason, 'runtime');
+	assert.ok(Math.abs(overrun.factor - COMPRESS) < 1e-9);
+	// A subtitle that ends where it should is left alone.
+	assert.strictEqual(detectFpsFactor({ mode: 'auto', lastCueSeconds: 5900, runtimeSeconds: 6000 }).factor, 1);
+	// The ambiguous direction is never guessed at automatically.
+	assert.strictEqual(detectFpsFactor({ mode: 'auto', lastCueSeconds: 5754, runtimeSeconds: 6000 }).factor, 1);
+	// An explicit PAL marker on the subtitle, with no PAL on the file, is taken.
+	assert.ok(
+		detectFpsFactor({
+			mode: 'auto',
+			subName: 'Movie.2010.PAL.DVDRip.srt',
+			videoName: 'Movie.2010.1080p.BluRay.x264-GRP.mkv',
+		}).factor > 1
+	);
+	// ...but a runtime that contradicts it wins, because then both sides really
+	// are the same frame rate and the subtitle is simply fine.
+	assert.strictEqual(
+		detectFpsFactor({
+			mode: 'auto',
+			subName: 'Movie.2010.PAL.DVDRip.srt',
+			videoName: 'Movie.2010.1080p.BluRay.x264-GRP.mkv',
+			lastCueSeconds: 6000,
+			runtimeSeconds: 6000,
+		}).factor,
+		1
+	);
+	assert.strictEqual(detectFpsFactor({ mode: 'off' }).factor, 1);
+
+	// Extra arguments, including a percent-encoded filename and the route's
+	// trailing `.json` landing on the last value.
+	const parsed = parseExtras('videoHash=8e245d9679d31e12&videoSize=1632335363&filename=My%20Movie%202010.mkv.json');
+	assert.strictEqual(parsed.videoHash, '8e245d9679d31e12');
+	assert.strictEqual(parsed.videoSize, '1632335363');
+	assert.strictEqual(parsed.filename, 'My Movie 2010.mkv');
+	assert.deepStrictEqual(parseExtras(''), {});
+
 	console.log('unit      ok');
 }
 
@@ -516,13 +647,59 @@ async function conversionTests() {
 	const many = await getJson(`/${CFG}/subtitles/movie/tt6666666.json`);
 	const manyUrls = many.json.subtitles.map((sub) => sub.url);
 	assert.strictEqual(new Set(manyUrls).size, manyUrls.length, 'the same file must not be listed twice');
-	assert.strictEqual(many.json.subtitles.length, 10, '5 releases x (converted + raw)');
+	assert.strictEqual(many.json.subtitles.length, 6, '3 per language (the default) x (converted + raw)');
 
 	const labels = many.json.subtitles.map((sub) => sub.label);
 	assert.ok(labels.every((label) => label.startsWith('繁體中文 · ') || label.startsWith('簡體原文 · ')));
 	assert.ok(labels.every((label) => label.length <= 40), 'labels must stay compact');
 	assert.ok(labels.every((label) => !label.includes('.srt')), 'labels must not leak the file extension');
 	assert.strictEqual(new Set(labels).size, labels.length, 'no two rows may look identical');
+
+	// The per-language count is the viewer's choice, not a fixed cap.
+	const wide = encodeConfig({
+		provider: 'v3',
+		sources: SOURCE_URL,
+		to: 'twp',
+		keepOriginal: true,
+		perLanguageLimit: 5,
+	});
+	const widened = await getJson(`/${wide}/subtitles/movie/tt6666666.json`);
+	assert.strictEqual(widened.json.subtitles.length, 10, '5 releases x (converted + raw) when asked for 5');
+
+	// A language that is not Chinese is listed untouched, in its own language,
+	// and never converted: the addon is a subtitle source, not only a converter.
+	const bilingual = encodeConfig({ provider: 'v3', sources: SOURCE2_URL, to: 'twp', langs: 'zht,eng' });
+	const two = await getJson(`/${bilingual}/subtitles/movie/tt1010101.json`);
+	const chinese = two.json.subtitles.filter((sub) => sub.label.startsWith('繁體中文'));
+	const english = two.json.subtitles.filter((sub) => sub.label.startsWith('English'));
+	assert.ok(chinese.length > 0, 'Chinese must still be converted');
+	assert.ok(english.length > 0, 'English must be listed as well');
+	assert.ok(english.every((sub) => sub.lang === 'eng'), 'an English entry must carry its own language');
+
+	const englishFile = await get(new URL(english[0].url).pathname);
+	assert.strictEqual(englishFile.status, 200);
+	assert.strictEqual(englishFile.body, ENGLISH_SRT, 'a non-Chinese subtitle must be served untouched');
+
+	// The file's identity is forwarded upstream, and the entry that comes back
+	// is marked as the match for the file being played.
+	const forwarding = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp' });
+	const blind = await getJson(`/${forwarding}/subtitles/movie/tt2020202.json`);
+	assert.strictEqual(blind.json.subtitles.length, 0, 'the upstream answers nothing without the extras');
+	const told = await getJson(
+		`/${forwarding}/subtitles/movie/tt2020202/videoHash=8e245d9679d31e12&videoSize=1632335363&filename=Forwarded.2010.1080p.BluRay.x264-GRP.mkv.json`
+	);
+	assert.strictEqual(told.json.subtitles.length, 1, 'the extras must reach the upstream');
+	// The label keeps the release tail rather than the film title.
+	assert.ok(told.json.subtitles[0].label.includes('x264-GRP'), 'the entry must come back through the addon');
+
+	// What the client sent is recorded, so the config page can show it rather
+	// than assume any particular client sends anything.
+	const log = await getJson('/api/requests');
+	const recorded = log.json.requests.find((entry) => entry.id === 'tt2020202');
+	assert.ok(recorded, 'subtitle requests must be recorded');
+	assert.strictEqual(recorded.extras.videoHash, '8e245d9679d31e12');
+	assert.ok(recorded.keys.includes('filename'), 'every received argument must be listed');
+
 	console.log('converted ok');
 }
 

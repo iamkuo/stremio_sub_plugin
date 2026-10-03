@@ -150,6 +150,108 @@ function toSubsenseCode(lang) {
 }
 
 /**
+ * Groups every spelling of one language under a single code.
+ *
+ * A single film routinely carries `zht`, `cht` and `zh-tw` entries at once, and
+ * all three are the same language to a viewer. Without collapsing them first,
+ * a "3 per language" cap would let one language occupy three slots under three
+ * different names.
+ */
+function canonicalLang(lang) {
+	const normalized = normalizeLang(lang);
+	if (!normalized) return '';
+	if (CHINESE_CODES.has(normalized)) return 'zh';
+	// Stremio speaks ISO 639-2/B (`eng`), most other places speak 639-1 (`en`),
+	// and a group keyed on one would never match a group keyed on the other.
+	// Google's map already knows both spellings, so it is reused here.
+	const google = lookup(GOOGLE_SOURCES, normalized);
+	return (google || normalized).split('-')[0];
+}
+
+/** A comma list of codes, canonicalised and de-duplicated, order preserved. */
+function canonicalList(value) {
+	const codes = String(value || '')
+		.split(/[,\s]+/)
+		.map(canonicalLang)
+		.filter(Boolean);
+	const unique = [];
+	for (const code of codes) if (!unique.includes(code)) unique.push(code);
+	return unique;
+}
+
+/**
+ * Short display names, used to label subtitles that are served untouched in
+ * their original language. Kept in the language's own script where that is the
+ * readable form, and short enough for Stremio's narrow picker column.
+ */
+const LANGUAGE_NAMES = {
+	zh: '中文',
+	en: 'English',
+	ja: '日本語',
+	ko: '한국어',
+	fr: 'Français',
+	de: 'Deutsch',
+	es: 'Español',
+	it: 'Italiano',
+	pt: 'Português',
+	ru: 'Русский',
+	ar: 'العربية',
+	hi: 'हिन्दी',
+	th: 'ไทย',
+	vi: 'Tiếng Việt',
+	id: 'Indonesia',
+	tr: 'Türkçe',
+	pl: 'Polski',
+	nl: 'Nederlands',
+	sv: 'Svenska',
+	da: 'Dansk',
+	fi: 'Suomi',
+	nb: 'Norsk',
+	cs: 'Čeština',
+	el: 'Ελληνικά',
+	he: 'עברית',
+	hu: 'Magyar',
+	ro: 'Română',
+	uk: 'Українська',
+	bg: 'Български',
+	hr: 'Hrvatski',
+	sr: 'Српски',
+	sk: 'Slovenčina',
+	sl: 'Slovenščina',
+	lt: 'Lietuvių',
+	lv: 'Latviešu',
+	et: 'Eesti',
+	ca: 'Català',
+	ms: 'Melayu',
+	tl: 'Filipino',
+	bn: 'বাংলা',
+	ta: 'தமிழ்',
+	te: 'తెలుగు',
+	ur: 'اردو',
+	fa: 'فارسی',
+	sw: 'Kiswahili',
+	af: 'Afrikaans',
+	is: 'Íslenska',
+	mk: 'Македонски',
+	sq: 'Shqip',
+	ka: 'ქართული',
+	az: 'Azərbaycan',
+	kk: 'Қазақша',
+	uz: 'Oʻzbek',
+	yue: '粵語',
+};
+
+/** Display name for a language code, falling back to the code itself. */
+function languageName(lang) {
+	const canonical = canonicalLang(lang);
+	if (!canonical) return '';
+	return LANGUAGE_NAMES[canonical] || canonical.toUpperCase();
+}
+
+/** The languages offered in the config page's picker, in display order. */
+const LANGUAGE_OPTIONS = Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }));
+
+/**
  * Google source language for a Stremio code, or null to let Google detect the
  * language itself (which is what happens for unsupported codes like `yue`).
  */
@@ -169,6 +271,9 @@ function toRestCode(lang) {
 
 module.exports = {
 	normalizeLang,
+	canonicalLang,
+	canonicalList,
+	languageName,
 	toSubsenseCode,
 	toGoogleSource,
 	toGoogleTarget,
@@ -176,4 +281,6 @@ module.exports = {
 	GOOGLE_SOURCES,
 	GOOGLE_TARGETS,
 	REST_CODES,
+	LANGUAGE_NAMES,
+	LANGUAGE_OPTIONS,
 };

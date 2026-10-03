@@ -1,16 +1,24 @@
 'use strict';
 
-const { decodeConfig } = require('./config');
-const { outputLang, convertSubtitle, looksSimplified } = require('./opencc');
-const { listSubtitles, normalizeLang, langAllowed, langList } = require('./sources');
+const { decodeConfig, clampPerLanguageLimit } = require('./config');
+const { outputLang, convertSubtitle, looksSimplified, TRADITIONAL_TARGETS } = require('./opencc');
+const { listSubtitles, normalizeLang, langList } = require('./sources');
 const { sourceList } = require('./sources');
+const { canonicalLang, languageName } = require('./langs');
+const { rankByMatch } = require('./match');
+const { fetchRuntimeSeconds } = require('./cinemeta');
 const { encodeToken } = require('./token');
 
 /**
  * Stremio `subtitles` resource handler.
  *
- * Chinese candidates are converted with OpenCC on download, so the upstream
- * file is never sent to the player directly.
+ * Two kinds of entries come out of here:
+ *
+ * - **Chinese** candidates are converted with OpenCC on download, so the
+ *   upstream file is never sent to the player directly.
+ * - **Every other configured language** is listed untouched. The file is still
+ *   proxied, because upstream encodings are a mess (CP1252, Big5, GBK), but no
+ *   conversion is applied — it is served in its original language.
  *
  * When the video has no Chinese subtitle at all, the configured fallback
  * languages (English by default) are machine translated with Google Translate
@@ -19,12 +27,11 @@ const { encodeToken } = require('./token');
  *
  * Sources routinely list the same file several times, and a popular film can
  * carry dozens of releases. Stremio's picker shows one row per entry, so
- * duplicates are collapsed and the list is capped: a wall of identical rows is
- * worse than a short list.
+ * duplicates are collapsed and the list is capped per language: a wall of
+ * identical rows is worse than a short list.
  */
 
-const MAX_CONVERTED_ENTRIES = 5;
-/** Hard upper bound; the viewer picks the actual length with `fallbackLimit`. */
+/** Hard upper bound on fallback entries; `fallbackLimit` picks the real length. */
 const MAX_FALLBACK_ENTRIES = 5;
 const RELEASE_LABEL_LIMIT = 30;
 
@@ -68,11 +75,48 @@ function composeLabel(kind, name) {
 }
 
 /**
+ * Release names are frequently Simplified too, and the picker is part of this
+ * addon's UI: `盗梦空间 4K` next to a 繁體中文 label reads as a bug. Only names
+ * that genuinely contain Simplified characters are converted, so Latin release
+ * tags (`1080p BluRay x264-AMIABLE`) pass through untouched.
+ */
+function traditionalName(name, cfg) {
+	if (!name || !looksSimplified(name)) return name;
+	return convertSubtitle(name, { ...cfg, mode: 'always' }).text;
+}
+
+/**
  * `繁體中文`, or `繁體中文（subsense）` once several upstreams are configured —
  * otherwise two entries from different addons look identical in the picker.
  */
 function withOrigin(kind, item, showOrigin) {
 	return showOrigin && item.origin ? `${kind}（${item.origin}）` : kind;
+}
+
+/**
+ * Name of the converted output, following the configured OpenCC target so a
+ * `t2s` setup does not advertise itself as Traditional.
+ */
+function convertedLabel(cfg) {
+	if (cfg.to === 'cn') return '简体中文';
+	if (cfg.to === 'hk' || cfg.to === 'hkp') return '繁體中文（香港）';
+	return '繁體中文';
+}
+
+/** Name of the untouched source entry offered by `keepOriginal`. */
+function rawLabel(cfg) {
+	return TRADITIONAL_TARGETS.has(cfg.to) ? '簡體原文' : '原文';
+}
+
+/**
+ * The languages to list, in the order the viewer asked for them. Chinese
+ * spellings collapse into one entry so `zht,chi,zh-tw` is not three languages.
+ */
+function displayLanguages(cfg) {
+	const codes = langList(cfg.langs).map(canonicalLang).filter(Boolean);
+	const unique = [];
+	for (const code of codes) if (!unique.includes(code)) unique.push(code);
+	return unique.length ? unique : ['zh'];
 }
 
 /**
@@ -90,6 +134,38 @@ function dedupe(items) {
 		unique.push(item);
 	}
 	return unique;
+}
+
+/**
+ * Orders one language's candidates by how well their release name matches the
+ * file being played, and keeps the configured number of them.
+ *
+ * The first entry is flagged when it is a genuine match, so the viewer can see
+ * which row belongs to their copy. Stremio sorts the picker unpredictably
+ * (stremio-bugs#2223), which is exactly why the match is marked in the label
+ * rather than only sorted to the top.
+ *
+ * @returns {Array<{ item: object, best: boolean }>}
+ */
+function rankAndPick(items, extras, limit) {
+	const videoName = extras && extras.filename;
+	// A hash match is a subtitle uploaded for this exact file, which no amount
+	// of release-name similarity can outrank.
+	const ranked = rankByMatch(items, videoName).sort(
+		(a, b) => Number(Boolean(b.item.hashMatch)) - Number(Boolean(a.item.hashMatch)) || a.index - b.index
+	);
+
+	// A mark means "this one, out of the several on offer". With a single
+	// candidate there is nothing to pick between, so the mark would say nothing
+	// — unless it is a hash match, which is worth stating on its own.
+	const worthMarking = items.length > 1;
+
+	return ranked
+		.slice(0, limit)
+		.map((entry, position) => ({
+			item: entry.item,
+			best: position === 0 && (entry.item.hashMatch || (worthMarking && entry.distinct)),
+		}));
 }
 
 /**
@@ -112,17 +188,6 @@ function fallbackCandidates(cfg, items) {
 }
 
 /**
- * Release names are frequently Simplified too, and the picker is part of this
- * addon's UI: `盗梦空间 4K` next to a 繁體中文 label reads as a bug. Only names
- * that genuinely contain Simplified characters are converted, so Latin release
- * tags (`1080p BluRay x264-AMIABLE`) pass through untouched.
- */
-function traditionalName(name, cfg) {
-	if (!name || !looksSimplified(name)) return name;
-	return convertSubtitle(name, { ...cfg, mode: 'always' }).text;
-}
-
-/**
  * Two genuinely different releases can still compact to the same label. A
  * numeric suffix keeps every row in the picker distinguishable.
  */
@@ -137,51 +202,96 @@ function disambiguateLabels(subtitles) {
 	return subtitles;
 }
 
-async function handleSubtitles({ type, id, config, baseUrl }) {
+async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 	const cfg = decodeConfig(config);
-	const items = await listSubtitles(cfg, type, id);
+	const items = dedupe(await listSubtitles(cfg, type, id, extras));
 	const pathSegment = config || 'default';
 	const lang = outputLang(cfg.to);
 	const subtitles = [];
-
-	const chinese = dedupe(items.filter((item) => langAllowed(cfg, item.lang))).slice(0, MAX_CONVERTED_ENTRIES);
-	// `fallbackCandidates` already yields nothing when no fallback language is
-	// configured, so an empty list is the only switch needed here.
-	const translatable = chinese.length ? [] : fallbackCandidates(cfg, dedupe(items));
-	const fallbackLabel = '繁體中文（Google）';
 	const showOrigin = sourceList(cfg.sources).length > 1;
+	const limit = clampPerLanguageLimit(cfg.perLanguageLimit);
+	const wanted = displayLanguages(cfg);
 
-	for (const item of chinese) {
-		subtitles.push({
-			id: `opencc:${item.id}`,
-			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name })}.srt`,
-			lang,
-			label: composeLabel(withOrigin('繁體中文', item, showOrigin), traditionalName(item.name, cfg)),
-		});
+	// The frame-rate check itself runs on download, because what decides it is
+	// whether the subtitle runs short or long — which is only known once the
+	// file is fetched. Its two other inputs, the file being played and the
+	// film's runtime, exist only on this request, so they are captured here.
+	const timing = {};
+	if (cfg.fpsMode === 'auto') {
+		if (extras && extras.filename) timing.v = String(extras.filename).slice(0, 160);
+		const runtimeSeconds = await fetchRuntimeSeconds(type, id);
+		if (runtimeSeconds) timing.rt = runtimeSeconds;
+	}
 
-		if (cfg.keepOriginal) {
+	const byLanguage = new Map();
+	for (const item of items) {
+		const code = canonicalLang(item.lang);
+		if (!code) continue;
+		if (!byLanguage.has(code)) byLanguage.set(code, []);
+		byLanguage.get(code).push(item);
+	}
+
+	let listedChinese = false;
+
+	for (const code of wanted) {
+		const group = byLanguage.get(code);
+		if (!group || !group.length) continue;
+
+		for (const { item, best } of rankAndPick(group, extras, limit)) {
+			const name = traditionalName(item.name, cfg);
+			const mark = best ? '✓ ' : '';
+
+			if (code === 'zh') {
+				listedChinese = true;
+				subtitles.push({
+					id: `opencc:${item.id}`,
+					url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, ...timing })}.srt`,
+					lang,
+					label: composeLabel(mark + withOrigin(convertedLabel(cfg), item, showOrigin), name),
+				});
+
+				if (cfg.keepOriginal) {
+					subtitles.push({
+						id: `opencc-raw:${item.id}`,
+						url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1, ...timing })}.srt`,
+						lang: normalizeLang(item.lang) || lang,
+						label: composeLabel(mark + withOrigin(rawLabel(cfg), item, showOrigin), name),
+					});
+				}
+				continue;
+			}
+
+			// Any other language is listed as it is: the file is proxied for
+			// encoding normalisation only, and keeps its original language.
 			subtitles.push({
-				id: `opencc-raw:${item.id}`,
-				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1 })}.srt`,
-				lang: normalizeLang(item.lang) || lang,
-				label: composeLabel(withOrigin('簡體原文', item, showOrigin), traditionalName(item.name, cfg)),
+				id: `native:${item.id}`,
+				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1, ...timing })}.srt`,
+				lang: normalizeLang(item.lang) || code,
+				label: composeLabel(mark + withOrigin(languageName(code), item, showOrigin), name),
 			});
 		}
 	}
 
-	for (const item of translatable) {
-		subtitles.push({
-			id: `machine:${item.id}`,
-			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
-				u: item.url,
-				f: item.fileId,
-				n: item.name,
-				x: 1,
-				s: normalizeLang(item.lang),
-			})}.srt`,
-			lang,
-			label: composeLabel(fallbackLabel, traditionalName(item.name, cfg)),
-		});
+	// The machine translation only exists for the case it was built for: the
+	// video has no Chinese subtitle at all. `fallbackCandidates` already yields
+	// nothing when no fallback language is configured.
+	if (!listedChinese) {
+		const fallbackLabel = `${convertedLabel(cfg)}（Google）`;
+		for (const item of fallbackCandidates(cfg, items)) {
+			subtitles.push({
+				id: `machine:${item.id}`,
+				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
+					u: item.url,
+					f: item.fileId,
+					n: item.name,
+					x: 1,
+					s: normalizeLang(item.lang),
+					...timing,
+				})}.srt`,
+				lang,
+				label: composeLabel(fallbackLabel, traditionalName(item.name, cfg)),
+			});
+		}
 	}
 
 	return { subtitles: disambiguateLabels(subtitles) };
@@ -193,9 +303,12 @@ module.exports = {
 	releaseLabel,
 	composeLabel,
 	traditionalName,
+	convertedLabel,
+	rawLabel,
+	displayLanguages,
+	rankAndPick,
 	withOrigin,
 	disambiguateLabels,
-	MAX_CONVERTED_ENTRIES,
 	MAX_FALLBACK_ENTRIES,
 	RELEASE_LABEL_LIMIT,
 };

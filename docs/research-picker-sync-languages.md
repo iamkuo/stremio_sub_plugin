@@ -147,3 +147,70 @@ web／Desktop 上會被 [stremio-web #1166](https://github.com/Stremio/stremio-w
 3. **多語言**：目標是「繁體中文為主、其他語言原樣提供」，還是「任何語言都能翻譯成任何語言」？
 4. **公開程度**：這是你個人自用，還是要給其他人用？（決定翻譯要不要改成自帶金鑰）
 5. **要不要先用第 0 步的探測**確認 Stremio 實際傳了哪些參數，再決定後續？
+
+---
+
+## 附錄：實作後確認的協定細節（2026-10-03）
+
+以下事實是在實作第 0～3 項時查證與實測確認的，補記在這裡以免日後重查。
+
+### extras 的傳遞形式
+
+[Stremio addon protocol](https://raw.githubusercontent.com/Stremio/stremio-addon-sdk/master/docs/protocol.md) 原文：
+
+> To pass extra args … you should define a route of the format
+> `/{resource}/{type}/{id}/{extraArgs}.json` where `extraArgs` is the query string
+> stringified object (for example `"search=game%20of%20thrones&skip=100"`)
+
+同一份文件對字幕資源的說明：
+
+> `/subtitles/{type}/{id}.json` … the `id` in this case is the Open Subtitles file
+> hash, while `extraArgs` … is used for `videoID` and `videoSize`
+
+**結論**：extras 以 `key=value&key=value` 形式黏在路徑末段，**不需要在 manifest 的 resource 上宣告**
+（SDK 的 manifest 文件只把 `extra` 定義給 catalog 用；資源物件只有 `{name, types, idPrefixes}`）。
+因此探測可以安全地只做「解析 + 記錄」，不必改 manifest——改 manifest 反而有被判定為無效的風險。
+
+**注意**：末段的 `.json` 會黏在最後一個值上（`filename=X.mkv.json`），解析時要剝掉；
+且必須用**未解碼**的路徑片段去解析，否則檔名裡的 `&` 會被誤認為分隔符。
+
+### 上游外掛不一定吃 extras
+
+實測 `https://opensubtitles-v3.strem.io/subtitles/movie/tt1375666.json`，帶與不帶
+`videoHash`／`videoSize`／`filename` 都回傳 90 筆，且其 manifest 的 `resources` 是 `["subtitles"]`
+（未宣告 extras）。**所以 v3 目前不做雜湊比對**，轉送 extras 只是無害的嘗試；
+真正的雜湊比對要靠 `rest`（OpenSubtitles.com API 的 `moviehash` 參數）。
+
+### label 的顯示狀況
+
+- `label` 欄位是 [stremio-core #947](https://github.com/Stremio/stremio-core/issues/947) 加入的，**v0.55.0 起**才有。
+- [stremio-web #1166](https://github.com/Stremio/stremio-web/issues/1166)：`Player.js` 在兩處做了
+  `label: subtitles.url`，把它覆蓋掉；`SubtitlesMenu.js` 的顯示邏輯是
+  `label.startsWith('http') ? lang : label`，因此被覆蓋後畫面退回顯示 `lang`。
+- [stremio-core-kotlin #109](https://github.com/Stremio/stremio-core-kotlin/issues/109)：Android 的
+  protobuf 橋接尚未對接此欄位。
+- 業界變通做法是把辨識文字塞進 `lang`（`langs` 套件對無法辨識的字串會原樣顯示），
+  在 Android 上會變成 "Unknown (und)"。
+
+### 清單排序不可靠
+
+[stremio-bugs #2223](https://github.com/Stremio/stremio-bugs/issues/2223)：自播放器 UI 1.9.0 起，
+字幕清單**隨機排序**，重開連結才會恢復。所以「最佳解排第一」不能當主要手段，必須靠標籤標記。
+
+### 音訊對齊不可能
+
+[stremio-core #965](https://github.com/Stremio/stremio-core/issues/965)（仍為 open）：
+
+> The `extra` parameters include `videoHash` (OpenSubtitles format), `videoSize`, and
+> `filename` … However, only the OpenSubtitles hash format … is supported.
+
+該 issue 要求的正是「把串流網址傳給字幕外掛」，以便外掛自行做位元組範圍下載與雜湊計算——
+這反證了**目前拿不到影片內容**，因此 ffsubsync／alass 類的音訊波形對齊無法實作。
+
+### 片長精度限制了 fps 自動判斷
+
+Cinemeta（`https://v3-cinemeta.strem.io/meta/{type}/{id}.json`）的 `meta.runtime` 只精確到分鐘
+（如 `"2h 28min"`）。對 148 分鐘的片，取整誤差 ±0.7%，而 25↔23.976 的幀率差是 4.27%。
+兩者只差一個數量級，因此：
+- 「字幕超出片尾約 4.3%」（正確字幕不可能）→ 可自動修正。
+- 「字幕提早約 4.1% 結束」→ 與「正確字幕的最後一句落在片尾字幕前」無法區分 → 只能手動。
