@@ -1,0 +1,68 @@
+---
+config:
+  flowchart:
+    curve: basis
+    nodeSpacing: 42
+    rankSpacing: 46
+    padding: 12
+---
+flowchart TD
+  START(["Stremio 播放器<br/>開啟字幕選單"]) --> FETCH["向上游查詢字幕<br/>主要語言 ＋ 次要語言 ＋ 翻譯來源"]
+  FETCH --> DEDUP["去除重複檔案<br/>同一個下載網址只留一筆"]
+  DEDUP --> GROUP["依語言分組<br/>zht / cht / zh-tw 都算同一個「中文」"]
+  GROUP --> EACH["逐語言走訪"]
+
+  EACH --> TIER{"這語言屬於<br/>哪一層？"}
+
+  TIER -->|"主要語言"| P_HAS{"上游有這個<br/>語言的字幕嗎？"}
+  P_HAS -->|"有"| LIST_ZH{"是中文嗎？"}
+  P_HAS -->|"沒有"| P_LANG{"翻譯來源裡<br/>有東西可翻嗎？"}
+
+  LIST_ZH -->|"是"| E_ZH["標籤：繁體中文<br/>取前 N 筆"]
+  LIST_ZH -->|"不是"| E_NATIVE["標籤：該語言名稱<br/>取前 N 筆"]
+
+  P_LANG -->|"有"| CAN{"Google 翻得出<br/>這個語言嗎？"}
+  P_LANG -->|"沒有"| NONE["不提供"]
+  CAN -->|"可以"| E_MACHINE["標籤：該語言（Google）<br/>取前 N 筆"]
+  CAN -->|"不行，例如粵語"| NONE
+
+  TIER -->|"次要語言"| S_HAS{"上游有這個<br/>語言的字幕嗎？"}
+  S_HAS -->|"有"| E_NATIVE2["標籤：該語言名稱<br/>取前 N 筆"]
+  S_HAS -->|"沒有"| SKIP["不提供<br/>不觸發翻譯"]
+
+  E_ZH --> TOKEN
+  E_NATIVE --> TOKEN
+  E_NATIVE2 --> TOKEN
+  E_MACHINE --> TOKEN
+  TOKEN["每筆產生一個 token<br/>指向 /srt/設定/token.srt"]
+
+  TOKEN --> PICK(["使用者選了其中一筆"])
+  PICK --> WHICH{"token 記的是<br/>哪一種處理？"}
+
+  WHICH -->|"原樣"| RAW["直接送出<br/>只修正檔案編碼"]
+  WHICH -->|"翻譯"| TRANS["下載字幕 → Google 翻譯"]
+  WHICH -->|"轉換"| CONV["下載字幕 → OpenCC 轉換"]
+
+  CONV --> AUTO{"模式 auto 且<br/>看起來不像簡體？"}
+  AUTO -->|"是，已經是繁體"| PASSTHRU["原樣送出<br/>一個字都不改"]
+  AUTO -->|"否，或模式 always"| CONVERTED["OpenCC 轉換後送出"]
+
+  TRANS --> TGT{"目標是中文<br/>而且是繁體系列？"}
+  TGT -->|"是"| LOCALISE["再套一次 OpenCC<br/>把軟件→軟體等用語在地化"]
+  TGT -->|"否"| TBODY["翻譯結果直接送出"]
+  LOCALISE --> TBODY
+
+  RAW --> FPS["時間軸校正<br/>fps 不符時才套用"]
+  PASSTHRU --> FPS
+  CONVERTED --> FPS
+  TBODY --> FPS
+  FPS --> DONE(["回傳字幕檔<br/>快取 1 小時"])
+
+  classDef list fill:#eef4ff,stroke:#5b7fc7,color:#12305e
+  classDef decide fill:#fff6e5,stroke:#c79330,color:#5a3c00
+  classDef serve fill:#eaf7ee,stroke:#3f8f57,color:#123a1e
+  classDef none fill:#f4f4f6,stroke:#9aa0ab,color:#4a4f57
+  class FETCH,DEDUP,GROUP,EACH,E_ZH,E_NATIVE,E_NATIVE2,E_MACHINE,TOKEN list
+  class TIER,P_HAS,LIST_ZH,P_LANG,CAN,S_HAS,WHICH,AUTO,TGT decide
+  class RAW,TRANS,CONV,PASSTHRU,CONVERTED,LOCALISE,TBODY,FPS,DONE serve
+  class NONE,SKIP none
