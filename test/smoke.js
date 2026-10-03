@@ -609,6 +609,16 @@ async function httpTests() {
 
 	const routes = await getJson('/manus-routes.json');
 	assert.ok(Array.isArray(routes.json.routes) && routes.json.routes.length > 0);
+
+	// Settings are saved in the URL, so opening the page through a settings URL
+	// must arrive pre-filled — that is what makes the URL worth bookmarking.
+	const settingsPage = await get(`/${configApi.json.config}/configure`);
+	assert.strictEqual(settingsPage.status, 200);
+	assert.ok(settingsPage.body.includes('"initial":{"'), 'a settings URL must send the settings back');
+	assert.ok(settingsPage.body.includes('openccsub.settings.v1'), 'the page must also remember settings locally');
+	const plainPage = await get('/configure');
+	assert.ok(plainPage.body.includes('"initial":null'), 'a plain /configure must send no settings');
+
 	console.log('http      ok');
 }
 

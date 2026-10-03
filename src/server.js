@@ -19,17 +19,29 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
-const CONFIGURE_HTML = fs
-	.readFileSync(path.join(PUBLIC_DIR, 'configure.html'), 'utf8')
-	.replace('/*__SETTINGS__*/null', () =>
+const CONFIGURE_TEMPLATE = fs.readFileSync(path.join(PUBLIC_DIR, 'configure.html'), 'utf8');
+
+/**
+ * The configuration page.
+ *
+ * Opened through a settings URL (`/<config>/configure`) the page arrives
+ * pre-filled with those settings, which is what makes that URL worth
+ * bookmarking. Opened plainly (`/configure`) it sends no `initial`, and the
+ * page falls back to whatever this browser last saved.
+ */
+function configureHtml(configSegment) {
+	const initial = configSegment ? decodeConfig(configSegment) : null;
+	return CONFIGURE_TEMPLATE.replace('/*__SETTINGS__*/null', () =>
 		JSON.stringify({
 			defaults: DEFAULTS,
 			locales: LOCALES,
 			pairs: PAIRS,
 			languages: LANGUAGE_OPTIONS,
 			simplifiedChars: SIMPLIFIED_CHARS,
+			initial,
 		})
 	);
+}
 
 function baseUrlFor(req) {
 	if (process.env.BASE_URL) return String(process.env.BASE_URL).replace(/\/+$/, '');
@@ -387,10 +399,10 @@ const server = http.createServer(async (req, res) => {
 
 		// Configuration page: /configure and /<config>/configure
 		if (segments.length === 0 || segments[0] === 'configure') {
-			return send(res, 200, CONFIGURE_HTML, { 'Content-Type': 'text/html; charset=utf-8' });
+			return send(res, 200, configureHtml(''), { 'Content-Type': 'text/html; charset=utf-8' });
 		}
 		if (segments.length === 2 && segments[1] === 'configure') {
-			return send(res, 200, CONFIGURE_HTML, { 'Content-Type': 'text/html; charset=utf-8' });
+			return send(res, 200, configureHtml(segments[0]), { 'Content-Type': 'text/html; charset=utf-8' });
 		}
 
 		// Manifest: /manifest.json and /<config>/manifest.json

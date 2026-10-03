@@ -358,6 +358,14 @@
 		<div class="hint" id="installHint">
 			按下「安裝到 Stremio」後，系統會以目前的設定建立一個專屬的 addon 網址；設定不同即為不同的安裝項目，可同時安裝多組。
 		</div>
+		<div class="field" style="margin-top:14px">
+			<label for="configureUrl">設定頁網址（可加入書籤）</label>
+			<code id="configureUrl" style="display:block; word-break:break-all; font-size:12px; padding:6px 0">…</code>
+			<div class="hint">
+				設定是存在網址裡的，伺服器不留任何資料。把這個網址加入書籤，下次打開就是現在的設定；
+				直接開 <code>/configure</code> 也會自動接續你在這台裝置最後一次調整的內容。
+			</div>
+		</div>
 	</div>
 
 	<footer>
@@ -369,7 +377,40 @@
 const SETTINGS = /*__SETTINGS__*/null;
 
 const el = (id) => document.getElementById(id);
-const state = { ...SETTINGS.defaults };
+
+/**
+ * Settings are saved three ways, in order of how much they can be trusted:
+ *
+ * 1. The install URL — the settings *are* the URL, so an installed addon keeps
+ *    them forever and the server stores nothing.
+ * 2. A settings URL (`/<config>/configure`), which is explicit and therefore
+ *    wins over anything remembered locally.
+ * 3. This browser, so that returning to /configure resumes where you left off
+ *    instead of starting from scratch every time.
+ */
+const STORAGE_KEY = 'openccsub.settings.v1';
+
+function loadSaved() {
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		return raw ? JSON.parse(raw) : null;
+	} catch {
+		// Private mode, or storage blocked because the page is framed
+		// cross-site in the editor preview. Not being able to remember is not a
+		// reason to stop working.
+		return null;
+	}
+}
+
+function saveSettings() {
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		/* the settings still travel in the install URL */
+	}
+}
+
+const state = { ...SETTINGS.defaults, ...(loadSaved() || {}), ...(SETTINGS.initial || {}) };
 
 function localeLabel(code) {
 	return SETTINGS.locales[code] || code;
@@ -598,6 +639,7 @@ async function refreshLinks() {
 		// correct both behind a proxy and on the published domain.
 		const manifestUrl = `${location.origin}${result.manifestPath}`;
 		el('manifestUrl').textContent = manifestUrl;
+		el('configureUrl').textContent = `${location.origin}${result.configurePath}`;
 		el('installBtn').href = `stremio://${location.host}${result.manifestPath}`;
 		el('webInstallBtn').href = `https://web.stremio.com/#/addons?addon=${encodeURIComponent(manifestUrl)}`;
 	} catch (error) {
@@ -623,6 +665,9 @@ async function refreshPreview() {
 }
 
 function schedulePreview() {
+	// Every path that changes a setting ends up here, so this is the one place
+	// that has to remember it.
+	saveSettings();
 	clearTimeout(previewTimer);
 	previewTimer = setTimeout(refreshPreview, 250);
 }
