@@ -12,7 +12,6 @@ const DEFAULTS = {
 	from: DEFAULT_FROM,
 	to: DEFAULT_TO,
 	mode: 'auto', // 'auto' = only convert Simplified subtitles, 'always' = always convert
-	keepOriginal: false, // also expose the untouched source subtitle
 	// Languages to list, in priority order. Chinese codes are converted with
 	// OpenCC; every other language is listed untouched, in its original form.
 	langs: 'zh',
@@ -34,7 +33,6 @@ const KEYMAP = {
 	from: 'f',
 	to: 't',
 	mode: 'm',
-	keepOriginal: 'k',
 	langs: 'l',
 	perLanguageLimit: 'pl',
 	provider: 'p',
@@ -86,7 +84,6 @@ function normalizeConfig(raw) {
 	cfg.from = from;
 	cfg.to = to;
 	cfg.mode = cfg.mode === 'always' ? 'always' : 'auto';
-	cfg.keepOriginal = cfg.keepOriginal === true || cfg.keepOriginal === 'true';
 	cfg.provider = PROVIDERS.includes(cfg.provider) ? cfg.provider : 'v3';
 	// Stored canonically so the config page's picker and the server agree on
 	// what "the same language" means, whatever spelling a source used.

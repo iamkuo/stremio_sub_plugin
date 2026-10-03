@@ -33,22 +33,22 @@
 		background: var(--panel);
 		border: 1px solid var(--line);
 		border-radius: 12px;
-		padding: 20px;
-		margin-bottom: 16px;
+		padding: 15px 16px;
+		margin-bottom: 11px;
 	}
 	.card h2 {
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: .08em;
 		color: var(--muted);
-		margin: 0 0 16px;
+		margin: 0 0 11px;
 		font-weight: 600;
 	}
-	.field { margin-bottom: 16px; }
+	.field { margin-bottom: 11px; }
 	.field:last-child { margin-bottom: 0; }
-	label { display: block; font-size: 14px; margin-bottom: 6px; font-weight: 500; }
-	.hint { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
-	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+	label { display: block; font-size: 13.5px; margin-bottom: 4px; font-weight: 500; }
+	.hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 	@media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
 	select, input[type=text], input[type=password], textarea {
 		width: 100%;
@@ -94,8 +94,12 @@
 	.preset:hover .act { color: var(--text); }
 	.preset.on { border-color: var(--accent); background: rgba(122, 162, 247, 0.16); }
 	.preset.on .who { color: var(--text); font-weight: 600; }
-	.langgrid { display: flex; flex-wrap: wrap; gap: 6px; max-height: 190px; overflow-y: auto; padding: 4px 2px; }
+	.langgrid { display: flex; flex-wrap: wrap; gap: 5px; max-height: 148px; overflow-y: auto; padding: 3px 2px; }
 	.langgrid .preset { padding: 4px 10px; font-size: 12px; }
+	/* A count that belongs to the control beside it, not to a field of its own. */
+	.inline-num { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+	.inline-num input { width: 58px; padding: 5px 8px; font-size: 13px; }
+	details > .field:first-of-type { margin-top: 10px; }
 	.reqline {
 		display: flex; gap: 10px; align-items: baseline;
 		padding: 6px 0; border-bottom: 1px solid var(--line);
@@ -153,7 +157,7 @@
 		font-size: 12.5px;
 		color: var(--muted);
 	}
-	footer { color: var(--muted); font-size: 12.5px; margin-top: 28px; text-align: center; }
+	footer { color: var(--muted); font-size: 12.5px; margin-top: 18px; text-align: center; }
 	footer a { color: var(--muted); }
 </style>
 </head>
@@ -161,7 +165,7 @@
 <div class="wrap">
 	<header>
 		<h1>OpenCC <span>簡繁轉換</span>字幕</h1>
-		<p>將 OpenSubtitles 的簡體中文字幕，在播放時即時轉換成繁體中文。所有 OpenCC 轉換選項皆可於此設定。</p>
+		<p>播放時即時把簡體中文字幕轉成繁體，並可同時列出其他語言的原文字幕。</p>
 	</header>
 
 	<div class="card">
@@ -176,27 +180,22 @@
 				<select id="to"></select>
 			</div>
 		</div>
-		<div class="field">
-			<label for="mode">轉換時機</label>
-			<select id="mode">
-				<option value="auto">自動偵測（僅轉換含簡體字的字幕，建議）</option>
-				<option value="always">一律轉換</option>
-			</select>
-			<div class="hint">「自動偵測」會比對 OpenCC 簡體字表，已繁體化的字幕原樣輸出，避免不必要的改動。</div>
-		</div>
-		<div class="field">
-			<div class="check">
-				<input type="checkbox" id="keepOriginal">
-				<label for="keepOriginal">同時保留原始字幕（在 Stremio 字幕清單中額外提供未轉換的版本）</label>
+		<details>
+			<summary>進階：轉換時機與自訂詞彙</summary>
+			<div class="field">
+				<label for="mode">轉換時機</label>
+				<select id="mode">
+					<option value="auto">自動偵測（僅轉換含簡體字的字幕）</option>
+					<option value="always">一律轉換</option>
+				</select>
+				<div class="hint">已繁體化的字幕原樣輸出，避免不必要的改動。</div>
 			</div>
-		</div>
-		<div class="field">
-			<details>
-				<summary>自訂詞彙對照表（選填）</summary>
+			<div class="field">
+				<label for="customDict">自訂詞彙對照表</label>
 				<textarea id="customDict" spellcheck="false" placeholder="一行一組，例如：&#10;軟件=軟體&#10;視頻=影片&#10;自行車=腳踏車"></textarea>
 				<div class="hint">在 OpenCC 標準轉換之後套用，可覆寫任何結果。支援 <code>=</code>、<code>,</code>、<code>，</code>、Tab 分隔，<code>#</code> 開頭為註解。</div>
-			</details>
-		</div>
+			</div>
+		</details>
 	</div>
 
 	<div class="card">
@@ -213,11 +212,9 @@
 			<textarea id="sources" spellcheck="false" rows="3"></textarea>
 			<div class="presets" id="sourcePresets"></div>
 			<div class="hint">
-				貼上任何 Stremio 字幕外掛的網址，外掛會<strong>同時查詢全部來源</strong>、合併並去除重複，
-				再一起轉成繁體中文。<br>
-				可以直接貼 <code>…/manifest.json</code>，也可以貼該外掛的個人化安裝網址
-				（例如 <code>https://subsense.nepiraw.com/你的設定碼</code>）——後半段路徑會原樣保留。
-				<strong>多數外掛的裸網址無效</strong>（會回 404），必須用它自己的設定頁產生的網址。
+				貼上任何 Stremio 字幕外掛的網址，會<strong>同時查詢全部來源</strong>並合併去重。
+				可直接貼 <code>…/manifest.json</code>，或該外掛的個人化安裝網址——
+				<strong>多數外掛的裸網址無效</strong>（回 404），要用它自己的設定頁產生的那組。
 			</div>
 		</div>
 		<div class="row">
@@ -225,8 +222,8 @@
 			<span class="badge" id="sourceBadge" hidden></span>
 		</div>
 		<div class="hint">
-			「檢查來源」會讀取每個外掛的 manifest，<strong>並實際查詢一次熱門電影</strong>的字幕，
-			因此能分辨「宣告有字幕卻永遠回空清單」的串流外掛。
+			「檢查來源」會讀 manifest，<strong>並實際查一次熱門電影</strong>，
+			因此能分辨「宣告有字幕卻永遠回空清單」的外掛。
 		</div>
 		<div class="stats" id="sourceReport" hidden></div>
 		<div class="field" id="apiKeyField" hidden>
@@ -235,21 +232,16 @@
 			<div class="hint">於 opensubtitles.com 免費註冊後，在個人設定頁的 API 區段取得。免費方案每日下載次數有限。</div>
 		</div>
 		<div class="field">
-			<label>要顯示的字幕語言</label>
+			<div class="row" style="justify-content:space-between">
+				<label>要顯示的字幕語言</label>
+				<span class="inline-num">每種語言 <input type="number" id="perLanguageLimit" min="1" max="10" step="1"> 筆</span>
+			</div>
 			<div class="langgrid" id="langPicker"></div>
 			<input type="text" id="langs" spellcheck="false" placeholder="也可以直接輸入語言代碼，以逗號分隔">
 			<div class="hint">
-				點一下即加入或移除。選了什麼就只顯示什麼：<strong>中文</strong>會用 OpenCC 轉成繁體，
-				<strong>其他語言</strong>原樣提供（不翻譯、不轉換，只修正編碼）。
-				預設只選中文；要讓這個外掛成為唯一的字幕來源，把常用的語言一起選起來即可。
-			</div>
-		</div>
-		<div class="field">
-			<label for="perLanguageLimit">每種語言顯示幾筆</label>
-			<input type="number" id="perLanguageLimit" min="1" max="10" step="1">
-			<div class="hint">
-				同一部片的候選常有數十個版本，而 Stremio 的清單只顯示語言、無法分辨版本，
-				因此每種語言只留幾筆。預設 3 筆。
+				點一下即加入或移除，選了什麼就只顯示什麼。<strong>中文</strong>用 OpenCC 轉成繁體，
+				<strong>其他語言</strong>原樣提供。同一部片的候選常有數十個版本而 Stremio 只顯示語言，
+				所以每種語言只留幾筆。
 			</div>
 		</div>
 	</div>
@@ -257,26 +249,28 @@
 	<div class="card">
 		<h2>備援翻譯（Google 翻譯）</h2>
 		<p class="hint" style="margin-top:-6px">
-			當影片<strong>完全找不到中文（或簡體）字幕</strong>時，改把下面列出的語言用 Google 翻譯成繁體中文。
-			翻譯只在你實際選擇該字幕時才會發生，所以瀏覽字幕清單不會產生任何請求。
+			影片<strong>完全找不到中文字幕</strong>時，改把下面列出的語言用 Google 翻譯成繁體。
+			翻譯只在你選了那筆字幕時才發生，瀏覽清單不會產生任何請求。
 		</p>
-		<div class="field">
-			<label for="fallbackLangs">備援語言（翻譯來源）</label>
-			<input type="text" id="fallbackLangs" spellcheck="false">
-			<div class="hint">以逗號分隔，預設 <code>eng</code>。清空此欄即完全停用備援翻譯。</div>
-		</div>
-		<div class="field">
-			<label for="fallbackLimit">備援字幕數量</label>
-			<input type="number" id="fallbackLimit" min="1" max="5" step="1">
-			<div class="hint">同一部片的候選往往有數十個版本，而 Stremio 只顯示語言、無法區分，因此預設只留 1 筆。</div>
+		<div class="grid">
+			<div class="field">
+				<label for="fallbackLangs">備援語言（翻譯來源）</label>
+				<input type="text" id="fallbackLangs" spellcheck="false">
+				<div class="hint">逗號分隔，預設 <code>eng</code>。清空即停用。</div>
+			</div>
+			<div class="field">
+				<label for="fallbackLimit">備援字幕數量</label>
+				<input type="number" id="fallbackLimit" min="1" max="5" step="1">
+				<div class="hint">候選常有數十個版本卻無法區分，預設只留 1 筆。</div>
+			</div>
 		</div>
 	</div>
 
 	<div class="card">
 		<h2>時間軸校正</h2>
 		<p class="hint" style="margin-top:-6px">
-			字幕的時間軸是跟著<strong>特定版本</strong>走的。如果字幕是為 25fps 的版本製作、而你播的是 23.976fps 的檔案，
-			就會出現「開頭還好、越看越偏」的漸進式不同步——這類誤差是固定倍率，算得出來。
+			字幕的時間軸跟著<strong>特定版本</strong>走。字幕若是為 25fps 的版本製作、而你播的是 23.976fps，
+			就會「開頭還好、越看越偏」——這類誤差是固定倍率，算得出來。
 		</p>
 		<div class="field">
 			<label for="fpsMode">校正方式</label>
@@ -287,9 +281,9 @@
 				<option value="23976to25">字幕是 23.976fps → 影片是 25fps（縮短 4.3%）</option>
 			</select>
 			<div class="hint">
-				「自動」只在<strong>不會誤判</strong>時才動手：字幕的版本名稱明確寫了 <code>PAL</code>／<code>25fps</code>，
-				或字幕長度超出影片片長約 4.3%（正確的字幕不可能超出片尾）。
-				反向的情況會和「字幕本來就比較早結束」混淆（片長只精確到分鐘），請用下面的手動選項。
+				「自動」只在<strong>不會誤判</strong>時動手：版本名稱寫了 <code>PAL</code>／<code>25fps</code>，
+				或字幕超出片長約 4.3%（正確字幕不可能超出片尾）。反向會與「字幕本來就較早結束」混淆
+				（片長只精確到分鐘），請用手動選項。
 			</div>
 		</div>
 	</div>
@@ -446,7 +440,6 @@ function readForm() {
 	state.from = el('from').value;
 	state.to = el('to').value;
 	state.mode = el('mode').value;
-	state.keepOriginal = el('keepOriginal').checked;
 	state.customDict = el('customDict').value;
 	state.provider = el('provider').value;
 	state.sources = el('sources').value;
@@ -462,7 +455,6 @@ function writeForm() {
 	fillSelect(el('from'), Object.keys(SETTINGS.pairs), state.from);
 	syncToOptions();
 	el('mode').value = state.mode;
-	el('keepOriginal').checked = state.keepOriginal;
 	el('customDict').value = state.customDict;
 	el('provider').value = state.provider;
 	el('sources').value = state.sources;
@@ -687,7 +679,7 @@ function onFormChange(event) {
 	schedulePreview();
 }
 
-for (const id of ['from', 'to', 'mode', 'keepOriginal', 'customDict', 'provider', 'sources', 'apiKey', 'langs', 'fallbackLangs', 'fallbackLimit']) {
+for (const id of ['from', 'to', 'mode', 'customDict', 'provider', 'sources', 'apiKey', 'langs', 'fallbackLangs', 'fallbackLimit']) {
 	el(id).addEventListener('input', onFormChange);
 	el(id).addEventListener('change', onFormChange);
 }

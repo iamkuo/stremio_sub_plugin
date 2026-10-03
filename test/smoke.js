@@ -329,7 +329,6 @@ const CFG = encodeConfig({
 	to: 'twp',
 	provider: 'v3',
 	sources: SOURCE_URL,
-	keepOriginal: true,
 });
 
 async function get(path) {
@@ -387,10 +386,10 @@ function unitTests() {
 	assert.strictEqual(looksSimplified('我已经解决了'), true);
 	assert.strictEqual(looksSimplified('我已經解決了'), false);
 
-	const encoded = encodeConfig({ from: 'cn', to: 'hkp', keepOriginal: true, customDict: '甲=乙' });
+	const encoded = encodeConfig({ from: 'cn', to: 'hkp', perLanguageLimit: 4, customDict: '甲=乙' });
 	const decoded = decodeConfig(encoded);
 	assert.strictEqual(decoded.to, 'hkp');
-	assert.strictEqual(decoded.keepOriginal, true);
+	assert.strictEqual(decoded.perLanguageLimit, 4);
 	assert.strictEqual(decoded.customDict, '甲=乙');
 	assert.strictEqual(decodeConfig('not-a-config').to, 'twp', 'invalid config falls back to defaults');
 	assert.ok(/^[A-Za-z0-9_-]+$/.test(encoded), 'config segment must be URL safe');
@@ -623,10 +622,10 @@ async function httpTests() {
 }
 
 async function conversionTests() {
-	// Simplified UTF-8 source -> converted, plus a raw copy.
+	// Simplified UTF-8 source -> converted, and English filtered out.
 	const list = await getJson(`/${CFG}/subtitles/movie/tt1111111.json`);
 	assert.strictEqual(list.status, 200);
-	assert.strictEqual(list.json.subtitles.length, 2, 'English subtitles must be filtered out');
+	assert.strictEqual(list.json.subtitles.length, 1, 'only Chinese is listed by default');
 	assert.strictEqual(list.json.subtitles[0].lang, 'zht');
 
 	const converted = await get(new URL(list.json.subtitles[0].url).pathname);
@@ -637,8 +636,8 @@ async function conversionTests() {
 	assert.ok(!converted.body.includes('这个软件'), 'no Simplified characters may survive');
 	assert.ok(converted.body.includes('00:00:01,000 --> 00:00:03,000'));
 
-	const raw = await get(new URL(list.json.subtitles[1].url).pathname);
-	assert.ok(raw.body.includes('把这个软件里面的视频转换一下'), 'raw copy must stay Simplified');
+	// The untouched passthrough path is exercised by the English entry in the
+	// bilingual case below, where the original file really is served as-is.
 
 	// Already-Traditional source -> untouched in auto mode.
 	const traditionalList = await getJson(`/${CFG}/subtitles/movie/tt3333333.json`);
@@ -657,10 +656,10 @@ async function conversionTests() {
 	const many = await getJson(`/${CFG}/subtitles/movie/tt6666666.json`);
 	const manyUrls = many.json.subtitles.map((sub) => sub.url);
 	assert.strictEqual(new Set(manyUrls).size, manyUrls.length, 'the same file must not be listed twice');
-	assert.strictEqual(many.json.subtitles.length, 6, '3 per language (the default) x (converted + raw)');
+	assert.strictEqual(many.json.subtitles.length, 3, '3 per language by default, one entry each');
 
 	const labels = many.json.subtitles.map((sub) => sub.label);
-	assert.ok(labels.every((label) => label.startsWith('繁體中文 · ') || label.startsWith('簡體原文 · ')));
+	assert.ok(labels.every((label) => label.startsWith('繁體中文 · ')));
 	assert.ok(labels.every((label) => label.length <= 40), 'labels must stay compact');
 	assert.ok(labels.every((label) => !label.includes('.srt')), 'labels must not leak the file extension');
 	assert.strictEqual(new Set(labels).size, labels.length, 'no two rows may look identical');
@@ -670,11 +669,10 @@ async function conversionTests() {
 		provider: 'v3',
 		sources: SOURCE_URL,
 		to: 'twp',
-		keepOriginal: true,
 		perLanguageLimit: 5,
 	});
 	const widened = await getJson(`/${wide}/subtitles/movie/tt6666666.json`);
-	assert.strictEqual(widened.json.subtitles.length, 10, '5 releases x (converted + raw) when asked for 5');
+	assert.strictEqual(widened.json.subtitles.length, 5, '5 releases when asked for 5');
 
 	// A language that is not Chinese is listed untouched, in its own language,
 	// and never converted: the addon is a subtitle source, not only a converter.

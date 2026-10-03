@@ -1,7 +1,7 @@
 'use strict';
 
 const { decodeConfig, clampPerLanguageLimit } = require('./config');
-const { outputLang, convertSubtitle, looksSimplified, TRADITIONAL_TARGETS } = require('./opencc');
+const { outputLang, convertSubtitle, looksSimplified } = require('./opencc');
 const { listSubtitles, normalizeLang, langList } = require('./sources');
 const { sourceList } = require('./sources');
 const { canonicalLang, languageName } = require('./langs');
@@ -101,11 +101,6 @@ function convertedLabel(cfg) {
 	if (cfg.to === 'cn') return '简体中文';
 	if (cfg.to === 'hk' || cfg.to === 'hkp') return '繁體中文（香港）';
 	return '繁體中文';
-}
-
-/** Name of the untouched source entry offered by `keepOriginal`. */
-function rawLabel(cfg) {
-	return TRADITIONAL_TARGETS.has(cfg.to) ? '簡體原文' : '原文';
 }
 
 /**
@@ -249,15 +244,6 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 					lang,
 					label: composeLabel(mark + withOrigin(convertedLabel(cfg), item, showOrigin), name),
 				});
-
-				if (cfg.keepOriginal) {
-					subtitles.push({
-						id: `opencc-raw:${item.id}`,
-						url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1, ...timing })}.srt`,
-						lang: normalizeLang(item.lang) || lang,
-						label: composeLabel(mark + withOrigin(rawLabel(cfg), item, showOrigin), name),
-					});
-				}
 				continue;
 			}
 
@@ -304,7 +290,6 @@ module.exports = {
 	composeLabel,
 	traditionalName,
 	convertedLabel,
-	rawLabel,
 	displayLanguages,
 	rankAndPick,
 	withOrigin,

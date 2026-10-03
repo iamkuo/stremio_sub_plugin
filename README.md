@@ -76,7 +76,6 @@ npm start            # 預設 http://localhost:3000
 | `from` | OpenCC 來源語言：`cn`、`t`、`tw`、`twp`、`hk`、`hkp`、`jp` | `cn` |
 | `to` | OpenCC 目標語言（依 `from` 動態篩選可用組合） | `twp` |
 | `mode` | `auto` = 僅轉換含簡體字的字幕；`always` = 一律轉換 | `auto` |
-| `keepOriginal` | 是否額外提供未轉換的原始字幕 | `false` |
 | `customDict` | 自訂詞彙對照表，一行一組 | 空 |
 | `provider` | `v3` = 上游 Stremio 字幕外掛（免金鑰，可多個）；`rest` = OpenSubtitles.com API | `v3` |
 | `sources` | `v3` 模式要查詢的上游外掛網址，逗號或換行分隔 | `https://opensubtitles-v3.strem.io` |
@@ -133,14 +132,14 @@ Stremio 的字幕選單對每個項目只顯示「語言」與「來源 addon」
 因此本外掛做了三件事讓清單保持可用：
 
 - **去除重複**：同一個字幕檔若被來源重複列出（同一個下載網址），只保留一筆。
-- **數量上限**：中文來源最多 5 筆；備援翻譯預設**只留 1 筆**（可用 `fallbackLimit` 調到 5，
+- **數量上限**：每種語言最多 `perLanguageLimit` 筆（預設 3）；備援翻譯預設**只留 1 筆**（可用 `fallbackLimit` 調到 5，
   並依「備援語言」順序排優先），避免熱門片出現一整排看起來一模一樣的選項。
 - **精簡標籤**：每筆帶上 `label` 欄位，格式為「種類 · 版本」，例如：
 
   | 種類 | 標籤範例 |
   | --- | --- |
   | OpenCC 轉換 | `繁體中文 · …1080p BluRay x264-AMIABLE` |
-  | 未轉換原文（`keepOriginal`） | `簡體原文 · …1080p BluRay x264-AMIABLE` |
+  | 其他語言（原樣提供） | `English · Inception 2010 CAM Xvid-LKRG` |
   | 備援翻譯 | `繁體中文（Google） · …1080p BluRay x264-AMIABLE` |
 
   版本名稱的處理規則：
@@ -159,7 +158,8 @@ Stremio 的字幕選單對每個項目只顯示「語言」與「來源 addon」
 > protobuf 橋接尚未傳遞此欄位）仍只顯示語言名稱，此時清單只會看到數筆「Chinese (Traditional)」，
 > 這也是為什麼數量上限比標籤更重要。
 >
-> 另外，開啟 `keepOriginal` 會讓每筆中文字幕變成兩筆（轉換版 + 原文版），這是預期行為。
+> 每一筆中文字幕只會出現一次（轉換版）。若要同時看到原文，那是「其他語言」的範圍，
+> 而簡體與繁體在語言選擇器裡是同一個「中文」，因此不會並列。
 
 ## 設定保存在哪裡
 

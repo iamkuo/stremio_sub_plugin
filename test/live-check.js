@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Live check against a running addon. Uses a config with `keepOriginal` so the
- * converted file can be diffed against the untouched upstream file.
+ * Live check against a running addon: converts a few real subtitles and diffs
+ * them against the upstream file the entry was built from. The upstream URL is
+ * read out of the addon's own token, so the check needs nothing but the addon.
  *
  *   PUB=https://host CFG=<base64url config> node test/live-check.js
  */
@@ -11,6 +12,17 @@ const SIMPLIFIED = new Set(Array.from(require('../src/data/simplified-chars')));
 
 const PUB = process.env.PUB || 'http://127.0.0.1:7000';
 const CFG = process.env.CFG || 'default';
+
+/** The upstream file an entry was built from, read out of the entry's token. */
+function upstreamUrl(entryUrl) {
+	try {
+		const token = new URL(entryUrl).pathname.split('/').pop().replace(/\.srt$/i, '');
+		const data = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+		return data.u || null;
+	} catch {
+		return null;
+	}
+}
 
 const TARGETS = [
 	['movie', 'tt0816692'],
@@ -54,7 +66,8 @@ async function main() {
 		}
 
 		const converted = await (await fetch(entries[0].url)).text();
-		const original = entries[1] ? await (await fetch(entries[1].url)).text() : null;
+		const raw = upstreamUrl(entries[0].url);
+		const original = raw ? await (await fetch(raw)).text().catch(() => null) : null;
 
 		const before = original ? leftovers(original) : leftovers(converted);
 		const after = leftovers(converted);
