@@ -18,7 +18,7 @@
  * languages for machine translation.
  */
 
-const { normalizeLang, toRestCode } = require('./langs');
+const { normalizeLang, toRestCode, toSubsenseCode } = require('./langs');
 
 const DEFAULT_SOURCE = 'https://opensubtitles-v3.strem.io';
 const REST_BASE = 'https://api.opensubtitles.com/api/v1';
@@ -103,6 +103,76 @@ function originLabel(base) {
 	}
 }
 
+const SUBSENSE_BASE = 'https://subsense.nepiraw.com';
+
+/**
+ * Builds a ready-to-paste SubSense base URL.
+ *
+ * SubSense keeps its whole configuration in the path, as URL-encoded JSON, and
+ * answers 404 on a bare origin. The language codes matter more than they look:
+ * see `toSubsenseCode` for why an unrecognised one silently yields English.
+ */
+function subsenseUrl(languages) {
+	const codes = [...new Set((languages || []).map(toSubsenseCode).filter(Boolean))];
+	if (!codes.length) return SUBSENSE_BASE;
+	const config = { languages: codes, maxSubtitles: 25 };
+	return `${SUBSENSE_BASE}/${encodeURIComponent(JSON.stringify(config))}`;
+}
+
+/**
+ * Curated upstreams, so a viewer does not have to hunt for install URLs.
+ *
+ * Every entry was checked against the live service. Only OpenSubtitles v3 works
+ * from its bare origin: the rest keep their configuration in the URL and answer
+ * 404 (or 500) without it. Those carry a `configure` link instead of a `url` —
+ * pretending a bare domain works would only produce an empty picker later — and
+ * SubSense gets its URL built here rather than copied out of a screenshot.
+ */
+const KNOWN_SOURCES = [
+	{
+		id: 'opensubtitles-v3',
+		label: 'OpenSubtitles v3',
+		note: '免金鑰、免設定，開箱即用（實測 90 筆）',
+		url: DEFAULT_SOURCE,
+	},
+	{
+		id: 'subsense',
+		label: 'SubSense',
+		note: '免金鑰聚合 OpenSubtitles／SubDL／SubSource 等 10 個來源；網址已依你的語言設定產生',
+		build: (cfg) => subsenseUrl(['chi', ...langList(cfg.fallbackLangs)]),
+		configure: `${SUBSENSE_BASE}/configure`,
+	},
+	{
+		id: 'subdl',
+		label: 'SubDL Subtitles',
+		note: '需要 SubDL 的免費 API Key，請先到它的設定頁產生安裝網址',
+		configure: 'https://subdl.strem.top/configure',
+	},
+	{
+		id: 'subsource',
+		label: 'SubSource Subtitles',
+		note: '需要 SubSource 的 API Key，請先到它的設定頁產生安裝網址',
+		configure: 'https://subsource.strem.top/configure',
+	},
+	{
+		id: 'stremio-community-subtitles',
+		label: 'Stremio Community Subtitles',
+		note: '社群上傳的字幕，請先到它的設定頁產生安裝網址',
+		configure: 'https://stremio-community-subtitles.top/configure',
+	},
+];
+
+/** The curated list, with any per-viewer parts already filled in. */
+function knownSources(cfg) {
+	return KNOWN_SOURCES.map((entry) => ({
+		id: entry.id,
+		label: entry.label,
+		note: entry.note,
+		configure: entry.configure || '',
+		url: entry.build ? entry.build(cfg) : entry.url || '',
+	}));
+}
+
 /** IMDb ids look like `tt1234567` (movies) or `tt1234567:1:2` (series). */
 function sanitizeId(id) {
 	return String(id || '').replace(/[^A-Za-z0-9:._-]/g, '');
@@ -151,7 +221,13 @@ async function listFromAddon(base, type, id) {
 			id: String(sub.id || sub.url),
 			url: sub.url,
 			lang: normalizeLang(sub.lang),
-			name: sub.subtitleFileName || sub.movieReleaseName || '',
+			// Addons disagree on what to call a release: OpenSubtitles v3 uses
+			// `subtitleFileName`, SubSense uses `fileName`/`releaseName`/`label`.
+			// Reading only one of them leaves the picker full of bare numbered
+			// rows, which is exactly what the label is meant to avoid.
+			name: String(
+				sub.subtitleFileName || sub.movieReleaseName || sub.fileName || sub.releaseName || sub.label || ''
+			).trim(),
 			origin,
 		}));
 }
@@ -246,10 +322,13 @@ async function listSubtitles(cfg, type, id) {
 
 module.exports = {
 	DEFAULT_SOURCE,
+	SUBSENSE_BASE,
 	CHINESE_LANGS,
 	addonBase,
 	sourceList,
 	originLabel,
+	subsenseUrl,
+	knownSources,
 	resourceNames,
 	fetchManifest,
 	listFromAddon,

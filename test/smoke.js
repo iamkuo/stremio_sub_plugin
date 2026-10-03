@@ -176,6 +176,17 @@ const mockSource2 = http.createServer((req, res) => {
 		json({ id: 'test.streamonly', name: 'Stream Only', resources: ['stream'], types: ['movie'] });
 		return;
 	}
+	// A configurable addon: the manifest loads, but every subtitle request needs
+	// the configuration segment its own configure page would have produced.
+	if (req.url === '/needsconfig/manifest.json') {
+		json({ id: 'test.needsconfig', name: 'Needs Config', resources: ['subtitles'], types: ['movie'] });
+		return;
+	}
+	if (req.url.startsWith('/needsconfig/subtitles/')) {
+		res.writeHead(404);
+		res.end('Not Found');
+		return;
+	}
 	if (req.url.startsWith('/subtitles/movie/tt1111111')) {
 		// The first entry repeats the other source's URL and must be collapsed;
 		// the second is unique to this source and must survive.
@@ -204,7 +215,9 @@ const mockSource2 = http.createServer((req, res) => {
 					id: 'only2',
 					url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111?src=2`,
 					lang: 'zht',
-					subtitleFileName: 'Only.From.Second.srt',
+					// SubSense names things differently from OpenSubtitles v3.
+					label: 'OpenSubtitles · [SRT] · Only.From.Second.srt',
+					fileName: 'Only.From.Second.srt',
 				},
 			],
 		});
@@ -250,9 +263,16 @@ const { splitSegments } = require('../src/srt');
 const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/google');
 const { clampFallbackLimit, MAX_FALLBACK_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
-const { toGoogleSource, toGoogleTarget } = require('../src/langs');
-const { sourceList, addonBase, originLabel } = require('../src/sources');
-	const { composeLabel, releaseLabel, disambiguateLabels, withOrigin, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
+const { toGoogleSource, toGoogleTarget, toSubsenseCode } = require('../src/langs');
+const { sourceList, addonBase, originLabel, subsenseUrl, knownSources } = require('../src/sources');
+	const {
+		composeLabel,
+		releaseLabel,
+		traditionalName,
+		disambiguateLabels,
+		withOrigin,
+		RELEASE_LABEL_LIMIT,
+	} = require('../src/subtitles');
 
 const BASE = `http://127.0.0.1:${PORT}`;
 const SOURCE_URL = `http://127.0.0.1:${MOCK_PORT}`;
@@ -363,28 +383,55 @@ function unitTests() {
 	assert.deepStrictEqual(parseTranslations(['a', 'b']), ['a', 'b']);
 	assert.deepStrictEqual(parseTranslations([['a', 'fr']]), ['a'], 'sl=auto answers with pairs');
 
-// Upstream URL handling: a bare origin, a config segment or a manifest all work.
-assert.deepStrictEqual(sourceList('https://a.example.com'), ['https://a.example.com']);
-assert.deepStrictEqual(sourceList('https://a.example.com/cfg/manifest.json'), ['https://a.example.com/cfg']);
-assert.deepStrictEqual(sourceList('https://a.example.com, https://a.example.com'), ['https://a.example.com'], 'duplicates collapse');
-assert.deepStrictEqual(sourceList('not a url'), [], 'non-HTTP entries are dropped');
-assert.strictEqual(addonBase('https://x.example.com/cfg/'), 'https://x.example.com/cfg');
-assert.strictEqual(originLabel('https://subsense.nepiraw.com/abc'), 'subsense');
-assert.strictEqual(originLabel('not a url'), '');
+	// Upstream URL handling: a bare origin, a config segment or a manifest all work.
+	assert.deepStrictEqual(sourceList('https://a.example.com'), ['https://a.example.com']);
+	assert.deepStrictEqual(sourceList('https://a.example.com/cfg/manifest.json'), ['https://a.example.com/cfg']);
+	assert.deepStrictEqual(sourceList('https://a.example.com, https://a.example.com'), ['https://a.example.com'], 'duplicates collapse');
+	assert.deepStrictEqual(sourceList('not a url'), [], 'non-HTTP entries are dropped');
+	assert.strictEqual(addonBase('https://x.example.com/cfg/'), 'https://x.example.com/cfg');
+	assert.strictEqual(originLabel('https://subsense.nepiraw.com/abc'), 'subsense');
+	assert.strictEqual(originLabel('not a url'), '');
 
-// The origin tag only appears once more than one upstream is configured.
-assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, false), '繁體中文');
-assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, true), '繁體中文（subsense）');
+	// The origin tag only appears once more than one upstream is configured.
+	assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, false), '繁體中文');
+	assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, true), '繁體中文（subsense）');
 
-// Install links that predate the upstream list keep their source.
-const legacy = Buffer.from(JSON.stringify({ u: 'https://legacy.example.com' }), 'utf8').toString('base64url');
-assert.strictEqual(decodeConfig(legacy).sources, 'https://legacy.example.com');
+	// Install links that predate the upstream list keep their source.
+	const legacy = Buffer.from(JSON.stringify({ u: 'https://legacy.example.com' }), 'utf8').toString('base64url');
+	assert.strictEqual(decodeConfig(legacy).sources, 'https://legacy.example.com');
+
+	// SubSense silently serves English for a code it does not know, so every
+	// spelling of Chinese has to collapse to the one code it accepts.
+	assert.strictEqual(toSubsenseCode('zht'), 'chi');
+	assert.strictEqual(toSubsenseCode('zh-TW'), 'chi');
+	assert.strictEqual(toSubsenseCode('eng'), 'eng');
+	assert.strictEqual(toSubsenseCode('jpn'), 'jpn');
+	assert.ok(subsenseUrl(['chi']).includes(encodeURIComponent('"languages":["chi"]')));
+
+	// Presets: an addon that cannot work from a bare URL must link to the page
+	// that produces one, rather than offering a URL that answers 404.
+	const presets = knownSources({ fallbackLangs: 'eng' });
+	const subsense = presets.find((preset) => preset.id === 'subsense');
+	assert.ok(subsense.url.includes(encodeURIComponent('["chi","eng"]')), 'the SubSense URL must carry the language config');
+	assert.ok(subsense.url.startsWith('https://subsense.nepiraw.com/'), 'the SubSense URL must point at the service');
+	const needing = presets.filter((preset) => !preset.url);
+	assert.ok(needing.length > 0, 'some presets are expected to need their own configuration');
+	assert.ok(needing.every((preset) => preset.configure.startsWith('https://')), 'each of those must link to a configure page');
+	assert.ok(presets.every((preset) => preset.label && preset.note), 'every preset needs a label and an explanation');
 
 	// The fallback list length is clamped to a sane range.
 	assert.strictEqual(clampFallbackLimit(undefined), 1);
 	assert.strictEqual(clampFallbackLimit(3), 3);
 	assert.strictEqual(clampFallbackLimit(0), 1);
 	assert.strictEqual(clampFallbackLimit(99), MAX_FALLBACK_LIMIT);
+
+	// Release names are converted too, but only when they really are Simplified.
+	const nameCfg = decodeConfig(CFG);
+	assert.strictEqual(traditionalName('盗梦空间 4K', nameCfg), '盜夢空間 4K');
+	assert.strictEqual(
+		traditionalName('Inception.2010.1080p.BluRay.x264-AMIABLE', nameCfg),
+		'Inception.2010.1080p.BluRay.x264-AMIABLE'
+	);
 	console.log('unit      ok');
 }
 
@@ -501,9 +548,13 @@ assert.ok(!looksSimplified(file.body), 'the merged entry must be converted, not 
 }
 
 // A subtitle only one of the addons carries is still found.
-const secondOnly = await getJson(`/${both}/subtitles/movie/tt9999999.json`);
-assert.strictEqual(secondOnly.json.subtitles.length, 1);
-assert.ok(secondOnly.json.subtitles[0].label.startsWith('繁體中文（localhost）'));
+	const secondOnly = await getJson(`/${both}/subtitles/movie/tt9999999.json`);
+	assert.strictEqual(secondOnly.json.subtitles.length, 1);
+	assert.ok(secondOnly.json.subtitles[0].label.startsWith('繁體中文（localhost）'));
+	assert.ok(
+		secondOnly.json.subtitles[0].label.includes('Only From Second'),
+		'a SubSense-style fileName must still become the release label'
+	);
 
 // One dead source must not stop the others from answering.
 const withDead = encodeConfig({ provider: 'v3', sources: `http://127.0.0.1:1, ${SOURCE_URL}`, to: 'twp' });
@@ -533,11 +584,26 @@ assert.strictEqual(check.json.results.length, 3);
 	assert.strictEqual(second.entries, 0, 'declaring the resource but serving nothing must be called out');
 	assert.strictEqual(streamOnly.subtitles, false, 'a stream addon must be reported as having no subtitles');
 
-const unreachable = await post('/api/sources/check', { settings: { sources: 'http://127.0.0.1:1' } });
-assert.strictEqual(unreachable.json.results[0].ok, false);
-assert.ok(unreachable.json.results[0].error, 'the reason must be reported');
+	const unreachable = await post('/api/sources/check', { settings: { sources: 'http://127.0.0.1:1' } });
+	assert.strictEqual(unreachable.json.results[0].ok, false);
+	assert.ok(unreachable.json.results[0].error, 'the reason must be reported');
 
-console.log('multi     ok');
+	// An addon whose settings live in the URL answers 404 on its bare origin.
+	// That must be reported as "needs its own URL", not as an outage.
+	const needsConfig = await post('/api/sources/check', { settings: { sources: `${SOURCE2_URL}/needsconfig` } });
+	assert.strictEqual(needsConfig.json.results[0].subtitles, true);
+	assert.strictEqual(needsConfig.json.results[0].needsConfig, true, 'a configurable addon must be flagged');
+
+	// The curated list: SubSense's URL is built for this viewer's languages, and
+	// everything that cannot work from a bare URL links to its configure page.
+	const presets = await post('/api/sources/presets', { settings: { fallbackLangs: 'eng' } });
+	assert.strictEqual(presets.json.ok, true);
+	assert.ok(presets.json.sources.length >= 3);
+	const subsense = presets.json.sources.find((preset) => preset.id === 'subsense');
+	assert.ok(subsense.url.includes(encodeURIComponent('["chi","eng"]')));
+	assert.ok(presets.json.sources.some((preset) => preset.id === 'opensubtitles-v3' && preset.url));
+
+	console.log('multi     ok');
 }
 
 async function googleFallbackTests() {

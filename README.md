@@ -34,6 +34,7 @@ Stremio 播放器
 - **可聚合多個字幕外掛**：貼上任意數量的 Stremio 字幕外掛網址，外掛會同時查詢、合併並去除重複；
   也支援需要 API Key 但中文片源較多的 OpenSubtitles.com REST API。
 - **來源檢查器**：一鍵讀取每個上游的 manifest **並實際查詢一次**，立刻分辨哪些外掛真的給得出字幕。
+- **精選來源**：常用字幕外掛一鍵加入，會自動組好帶設定的網址（裸網域對這些外掛一律 404）。
 - **備援翻譯**：找不到任何中文字幕時，用 Google 翻譯（免金鑰）把備援語言（預設 `eng`）
   的字幕翻成繁體中文；翻譯只在你實際選擇該字幕時才發生。
 - **統計面板**：即時顯示快取命中率、快取節省的字元與翻譯次數，由伺服器主動推送更新。
@@ -143,6 +144,10 @@ Stremio 的字幕選單對每個項目只顯示「語言」與「來源 addon」
     真正能分辨版本的是 `1080p BluRay x264-AMIABLE` 這一段。
   - 截斷至 30 字元並在前面加上 `…`；完全沒有版本資訊時只顯示種類。
   - 若兩個版本壓縮後標籤仍然相同，會自動加上 ` (2)`、` (3)` 序號，確保每一列都分得出來。
+  - **版本名稱本身也會簡轉繁**：片源常把發行名稱寫成簡體（`盗梦空间 4K`），出現在繁體介面裡
+    像是壞掉；只對真的含簡體字的名稱轉換，因此 `1080p BluRay x264-AMIABLE` 這類純英文標籤不受影響。
+  - 不同外掛對版本名稱的欄位命名不一致（OpenSubtitles v3 用 `subtitleFileName`，
+    SubSense 用 `fileName`／`releaseName`／`label`），外掛會全部讀取，避免整排只剩編號。
 
 > `label` 需要 Stremio core **v0.55.0 以上**才會顯示；較舊的客戶端與部分平台（例如 Android 的
 > protobuf 橋接尚未傳遞此欄位）仍只顯示語言名稱，此時清單只會看到數筆「Chinese (Traditional)」，
@@ -232,6 +237,33 @@ GET {上游網址}/subtitles/{type}/{id}.json
 - **缺點**：中文片源相對少（多數影片只有 1 部中文字幕，部分影片完全沒有），且上游是
   Stremio 社群服務，沒有可用性保證。
 
+#### 精選來源：一鍵加入
+
+設定頁的「上游字幕外掛」欄位下方有一排**精選來源**按鈕，點一下就自動填入正確的網址，
+不需要自己去翻各外掛的設定頁。目前收錄：
+
+| 精選來源 | 加入方式 |
+| --- | --- |
+| OpenSubtitles v3 | 直接使用裸網域 `https://opensubtitles-v3.strem.io` |
+| SubSense | 自動產生帶語言設定的網址（見下方陷阱） |
+| SubDL Subtitles | 導向 `https://subdl.strem.top/configure` 產生個人化網址 |
+| SubSource Subtitles | 導向 `https://subsource.strem.top/configure` 產生個人化網址 |
+| Stremio Community Subtitles | 導向 `https://stremio-community-subtitles.top/configure` 產生個人化網址 |
+
+後四個外掛的**設定存在網址裡**，裸網域查詢一律回 `404`／`500`（這是它們的設計，不是故障）。
+按鈕會直接把你帶到該外掛的設定頁，或（SubSense）幫你組好網址，因此不需要自己理解這件事。
+
+> **SubSense 的語言代碼陷阱**：它的設定是 URL 編碼的 JSON，放在路徑上——
+> `https://subsense.nepiraw.com/<encodeURIComponent(JSON)>`，例如
+> `{"languages":["chi","eng"],"maxSubtitles":25}`。
+> 其中**只有 `chi`／`zh` 會拿到中文**；`zht`（繁體）會被**默默忽略並改回英文**，
+> 查詢不會報錯，只會安靜地給你英文字幕。本外掛因此把各種中文寫法
+> （`zht`、`cht`、`zh-tw`、`zh-Hant`…）一律對應成 `chi`。
+
+> **免費方案的廣告字幕**：SubSense 走的是 Wyzie 的免費方案，會在回傳清單的最前面塞一筆
+> 推銷字幕（內容是「You're on the free plan…」）。本外掛不會把它濾掉——判斷「哪一筆是廣告」
+> 無法可靠地做——請在選單中略過它。
+
 #### 為什麼有些外掛抓不到字幕
 
 **「manifest 宣告了 `subtitles`」不等於「真的給得出字幕」。** 串流外掛為了讓 Stremio 把它
@@ -241,10 +273,12 @@ GET {上游網址}/subtitles/{type}/{id}.json
 | --- | --- | --- |
 | OpenSubtitles v3 | 是 | **90 筆** |
 | PenguPlay | 是 | **0 筆**（串流外掛，字幕資源是空殼） |
-| SubSense | 是 | **HTTP 404**（未設定的安裝網址無效，需先在它的設定頁選好語言） |
+| SubSense（裸網域） | 是 | **HTTP 404**（未設定的安裝網址無效，需先在它的設定頁選好語言） |
+| SubSense（精選按鈕產生的網址） | 是 | **5 筆中文**（實測 `tt1375666`） |
 
 所以設定頁提供了「**檢查來源**」按鈕：它會讀取每個外掛的 manifest，**再實際查詢一次熱門電影
 （`tt1375666`）**，並回報真正拿到的筆數，直接告訴你這個來源值不值得留。
+遇到回 `400`／`403`／`404`／`500` 的來源，檢查器會標示為「需要個人化網址」而不是「故障」。
 
 > **抓不到的東西**：串流外掛影片檔**內嵌**的字幕。Stremio 的協定不會把串流網址或檔案雜湊
 > 傳給字幕外掛（見 [stremio-core #965](https://github.com/Stremio/stremio-core/issues/965)），

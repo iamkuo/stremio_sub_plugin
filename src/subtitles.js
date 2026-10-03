@@ -1,7 +1,7 @@
 'use strict';
 
 const { decodeConfig } = require('./config');
-const { outputLang } = require('./opencc');
+const { outputLang, convertSubtitle, looksSimplified } = require('./opencc');
 const { listSubtitles, normalizeLang, langAllowed, langList } = require('./sources');
 const { sourceList } = require('./sources');
 const { encodeToken } = require('./token');
@@ -112,6 +112,17 @@ function fallbackCandidates(cfg, items) {
 }
 
 /**
+ * Release names are frequently Simplified too, and the picker is part of this
+ * addon's UI: `盗梦空间 4K` next to a 繁體中文 label reads as a bug. Only names
+ * that genuinely contain Simplified characters are converted, so Latin release
+ * tags (`1080p BluRay x264-AMIABLE`) pass through untouched.
+ */
+function traditionalName(name, cfg) {
+	if (!name || !looksSimplified(name)) return name;
+	return convertSubtitle(name, { ...cfg, mode: 'always' }).text;
+}
+
+/**
  * Two genuinely different releases can still compact to the same label. A
  * numeric suffix keeps every row in the picker distinguishable.
  */
@@ -145,7 +156,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 			id: `opencc:${item.id}`,
 			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name })}.srt`,
 			lang,
-			label: composeLabel(withOrigin('繁體中文', item, showOrigin), item.name),
+			label: composeLabel(withOrigin('繁體中文', item, showOrigin), traditionalName(item.name, cfg)),
 		});
 
 		if (cfg.keepOriginal) {
@@ -153,7 +164,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 				id: `opencc-raw:${item.id}`,
 				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1 })}.srt`,
 				lang: normalizeLang(item.lang) || lang,
-				label: composeLabel(withOrigin('簡體原文', item, showOrigin), item.name),
+				label: composeLabel(withOrigin('簡體原文', item, showOrigin), traditionalName(item.name, cfg)),
 			});
 		}
 	}
@@ -169,7 +180,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 				s: normalizeLang(item.lang),
 			})}.srt`,
 			lang,
-			label: composeLabel(fallbackLabel, item.name),
+			label: composeLabel(fallbackLabel, traditionalName(item.name, cfg)),
 		});
 	}
 
@@ -181,6 +192,7 @@ module.exports = {
 	dedupe,
 	releaseLabel,
 	composeLabel,
+	traditionalName,
 	withOrigin,
 	disambiguateLabels,
 	MAX_CONVERTED_ENTRIES,

@@ -81,6 +81,17 @@
 	.stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
 	.stat b { display: block; font-size: 17px; font-weight: 600; }
 	.stat span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+	.presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+	.preset {
+		display: inline-flex; align-items: baseline; gap: 8px;
+		background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+		border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12.5px;
+		cursor: pointer; text-decoration: none;
+	}
+	.preset:hover { border-color: var(--accent); }
+	.preset .who { color: var(--accent); }
+	.preset .act { color: var(--muted); font-size: 11.5px; }
+	.preset:hover .act { color: var(--text); }
 	pre.output {
 		background: var(--panel-2);
 		border: 1px solid var(--line);
@@ -187,11 +198,13 @@
 		<div class="field" id="sourcesField">
 			<label for="sources">上游字幕外掛（一行一個）</label>
 			<textarea id="sources" spellcheck="false" rows="3"></textarea>
+			<div class="presets" id="sourcePresets"></div>
 			<div class="hint">
 				貼上任何 Stremio 字幕外掛的網址，外掛會<strong>同時查詢全部來源</strong>、合併並去除重複，
 				再一起轉成繁體中文。<br>
 				可以直接貼 <code>…/manifest.json</code>，也可以貼該外掛的個人化安裝網址
 				（例如 <code>https://subsense.nepiraw.com/你的設定碼</code>）——後半段路徑會原樣保留。
+				<strong>多數外掛的裸網址無效</strong>（會回 404），必須用它自己的設定頁產生的網址。
 			</div>
 		</div>
 		<div class="row">
@@ -318,6 +331,7 @@ function syncToOptions() {
 function syncProviderFields() {
 	const isRest = state.provider === 'rest';
 	el('sourcesField').hidden = isRest;
+	el('sourcePresets').hidden = isRest;
 	el('sourceCheckBtn').hidden = isRest;
 	el('apiKeyField').hidden = !isRest;
 }
@@ -349,6 +363,60 @@ function writeForm() {
 	el('fallbackLangs').value = state.fallbackLangs;
 	el('fallbackLimit').value = state.fallbackLimit;
 	syncProviderFields();
+}
+
+/** Appends a URL to the upstream list unless it is already there. */
+function addSource(url) {
+	const existing = el('sources').value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
+	if (existing.includes(url)) return;
+	el('sources').value = [...existing, url].join('\n');
+	readForm();
+	refreshLinks();
+	schedulePreview();
+}
+
+/**
+ * The curated upstreams.
+ *
+ * Only OpenSubtitles v3 works from its bare origin, so a chip either adds its
+ * URL or — when the addon keeps its configuration in the URL and would answer
+ * 404 without it — links to that addon's configure page instead of quietly
+ * adding something that cannot work.
+ */
+async function loadPresets() {
+	const box = el('sourcePresets');
+	let presets;
+	try {
+		presets = (await post('api/sources/presets', { settings: state })).sources || [];
+	} catch {
+		box.textContent = '';
+		return;
+	}
+
+	box.textContent = '';
+	for (const preset of presets) {
+		const link = !preset.url;
+		const chip = document.createElement(link ? 'a' : 'button');
+		chip.className = 'preset';
+		chip.title = preset.note;
+		if (link) {
+			chip.href = preset.configure;
+			chip.target = '_blank';
+			chip.rel = 'noreferrer noopener';
+		} else {
+			chip.type = 'button';
+			chip.addEventListener('click', () => addSource(preset.url));
+		}
+
+		const who = document.createElement('span');
+		who.className = 'who';
+		who.textContent = preset.label;
+		const act = document.createElement('span');
+		act.className = 'act';
+		act.textContent = link ? '前往設定頁 →' : '加入';
+		chip.append(who, act);
+		box.appendChild(chip);
+	}
 }
 
 let previewTimer = null;
@@ -409,6 +477,8 @@ function onFormChange(event) {
 		readForm();
 	}
 	if (id === 'provider') syncProviderFields();
+	// The SubSense preset carries the chosen languages in its URL.
+	if (id === 'fallbackLangs') loadPresets();
 	refreshLinks();
 	schedulePreview();
 }
@@ -443,7 +513,12 @@ el('sourceCheckBtn').addEventListener('click', async () => {
 			.map((row) => {
 				if (!row.ok) return statTile(row.base, '無法連線', row.error);
 				if (!row.subtitles) return statTile(row.base, row.name, '沒有字幕資源（通常是串流外掛）');
-				if (row.entries === null) return statTile(row.base, row.name, `字幕查詢失敗：${row.probeError}`);
+				if (row.entries === null) {
+					const why = row.needsConfig
+						? '需要個人化安裝網址：請到該外掛的設定頁產生後貼上（裸網址無效）'
+						: `字幕查詢失敗：${row.probeError}`;
+					return statTile(row.base, row.name, why);
+				}
 				if (!row.entries) return statTile(row.base, row.name, '宣告有字幕，但實測 0 筆（串流外掛的空殼，或需要先設定）');
 				return statTile(row.base, row.name, `實測 ${row.entries} 筆字幕`);
 			})
@@ -602,6 +677,7 @@ el('copyBtn').addEventListener('click', async () => {
 
 writeForm();
 refreshLinks();
+loadPresets();
 refreshPreview();
 startStats();
 </script>

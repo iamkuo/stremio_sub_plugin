@@ -9,7 +9,7 @@ const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
-const { sourceList, fetchManifest, resourceNames, listFromAddon } = require('./sources');
+const { sourceList, fetchManifest, resourceNames, listFromAddon, knownSources } = require('./sources');
 const stats = require('./stats');
 const SIMPLIFIED_CHARS = require('./data/simplified-chars');
 
@@ -182,12 +182,31 @@ async function handleSourcesCheck(req, res) {
 			} catch (error) {
 				entry.entries = null;
 				entry.probeError = error.message;
+				// A configurable addon answers 404 (or 500) on its bare origin
+				// because its settings live in the URL. Without saying so, the
+				// viewer reads a status code as an outage and gives up on a
+				// perfectly good addon.
+				entry.needsConfig = /HTTP (400|403|404|500)/.test(error.message);
 			}
 			return entry;
 		})
 	);
 
 	sendJson(res, 200, { ok: true, probeId: PROBE_ID, results });
+}
+
+/**
+ * POST /api/sources/presets – the curated upstream list, with any per-viewer
+ * parts already filled in (SubSense's URL carries the chosen languages).
+ */
+async function handleSourcesPresets(req, res) {
+	let payload;
+	try {
+		payload = JSON.parse((await readBody(req)) || '{}');
+	} catch {
+		return sendJson(res, 400, { error: 'invalid JSON body' });
+	}
+	sendJson(res, 200, { ok: true, sources: knownSources(normalizeConfig(payload.settings || payload)) });
 }
 
 /* ------------------------------------------------------------------ *
@@ -301,6 +320,12 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'check') {
 			return handleSourcesCheck(req, res);
+		}
+		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'presets') {
+			return handleSourcesPresets(req, res);
+		}
+		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'presets') {
+			return handleSourcesPresets(req, res);
 		}
 		if (segments[0] === 'api' && segments[1] === 'stats') {
 			if (req.method === 'GET' && segments[2] === 'stream') {

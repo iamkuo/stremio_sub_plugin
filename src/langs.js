@@ -127,6 +127,28 @@ function lookup(map, lang) {
 	return map[normalized.split('-')[0]] || null;
 }
 
+/** Every spelling of Chinese that may arrive, including the ones SubSense rejects. */
+const CHINESE_CODES = new Set([
+	'zho', 'chi', 'zh', 'zht', 'chs', 'cht', 'cn', 'tw', 'hk',
+	'zh-cn', 'zh-tw', 'zh-hk', 'zh-hans', 'zh-hant',
+]);
+
+/**
+ * SubSense language code.
+ *
+ * SubSense wants ISO 639-2/B codes, which is what Stremio already speaks for
+ * most languages — but not for Chinese, where Stremio sends `zht` and SubSense
+ * does not recognise it. Worse, it fails *quietly*: an unknown code yields
+ * English subtitles rather than an error, so `zht` would look like a working
+ * source that simply has no Chinese.
+ */
+function toSubsenseCode(lang) {
+	const normalized = normalizeLang(lang);
+	if (!normalized) return null;
+	if (CHINESE_CODES.has(normalized)) return 'chi';
+	return normalized.split('-')[0];
+}
+
 /**
  * Google source language for a Stremio code, or null to let Google detect the
  * language itself (which is what happens for unsupported codes like `yue`).
@@ -147,6 +169,7 @@ function toRestCode(lang) {
 
 module.exports = {
 	normalizeLang,
+	toSubsenseCode,
 	toGoogleSource,
 	toGoogleTarget,
 	toRestCode,
