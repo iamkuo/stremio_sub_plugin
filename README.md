@@ -31,8 +31,9 @@ Stremio 播放器
 - **自動偵測**：只轉換真正含簡體字的字幕，已繁體化的字幕原樣輸出（以 OpenCC 的簡體字表判斷）。
 - **自訂詞彙對照表**：在 OpenCC 標準轉換之後套用，可覆寫任何結果（例如 `軟件=軟體`）。
 - **保留原始字幕**：可同時在字幕清單中提供未轉換的版本，方便比對。
-- **兩種字幕來源**：免金鑰的 OpenSubtitles v3 代理，或需要 API Key 但中文片源較多的
-  OpenSubtitles.com REST API。
+- **可聚合多個字幕外掛**：貼上任意數量的 Stremio 字幕外掛網址，外掛會同時查詢、合併並去除重複；
+  也支援需要 API Key 但中文片源較多的 OpenSubtitles.com REST API。
+- **來源檢查器**：一鍵讀取每個上游的 manifest **並實際查詢一次**，立刻分辨哪些外掛真的給得出字幕。
 - **備援翻譯**：找不到任何中文字幕時，用 Google 翻譯（免金鑰）把備援語言（預設 `eng`）
   的字幕翻成繁體中文；翻譯只在你實際選擇該字幕時才發生。
 - **統計面板**：即時顯示快取命中率、快取節省的字元與翻譯次數，由伺服器主動推送更新。
@@ -72,8 +73,8 @@ npm start            # 預設 http://localhost:3000
 | `mode` | `auto` = 僅轉換含簡體字的字幕；`always` = 一律轉換 | `auto` |
 | `keepOriginal` | 是否額外提供未轉換的原始字幕 | `false` |
 | `customDict` | 自訂詞彙對照表，一行一組 | 空 |
-| `provider` | `v3` = OpenSubtitles v3 代理（免金鑰）；`rest` = OpenSubtitles.com API | `v3` |
-| `sourceUrl` | `v3` 模式要代理的伺服器網址 | `https://opensubtitles-v3.strem.io` |
+| `provider` | `v3` = 上游 Stremio 字幕外掛（免金鑰，可多個）；`rest` = OpenSubtitles.com API | `v3` |
+| `sources` | `v3` 模式要查詢的上游外掛網址，逗號或換行分隔 | `https://opensubtitles-v3.strem.io` |
 | `apiKey` | `rest` 模式的 OpenSubtitles.com API Key | 空 |
 | `langs` | 接受的字幕語言代碼（逗號分隔） | `zht,chi,zho,chs,cht,zh-cn,zh-tw` |
 | `fallbackLangs` | 沒有中文字幕時要翻譯的來源語言（逗號分隔，留空即停用） | `eng` |
@@ -211,18 +212,43 @@ Stremio 的字幕選單對每個項目只顯示「語言」與「來源 addon」
 
 ## 字幕來源
 
-### 1. OpenSubtitles v3 代理（預設，免金鑰）
+### 1. 上游 Stremio 字幕外掛（預設，免金鑰，可聚合多個）
 
-外掛直接代理 Stremio 官方的 OpenSubtitles v3 addon：
+Stremio 的字幕外掛全部走同一套協定，因此**任何**宣告 `subtitles` 資源的外掛都能當成本外掛的來源：
 
 ```
-GET https://opensubtitles-v3.strem.io/subtitles/{type}/{id}.json
+GET {上游網址}/subtitles/{type}/{id}.json
 ```
 
+在設定頁的「上游字幕外掛」欄位一行貼一個網址即可，外掛會**同時**查詢全部來源、
+把結果合併、依下載網址去除重複，再一起轉成繁體中文。
+
+- 網址可以是裸網域（`https://opensubtitles-v3.strem.io`）、該外掛的**個人化安裝網址**
+  （`https://subsense.nepiraw.com/你的設定碼`，後半段路徑原樣保留），或完整的 `…/manifest.json`。
+- 單一來源失敗不會影響其他來源：查不到的那個會被略過並寫進日誌。
+- 設定多於一個來源時，每筆字幕的標籤會加上來源名稱（例如 `繁體中文（subsense）`），
+  方便判斷哪個外掛的片源比較好。
 - **優點**：不需要註冊、不需要 API Key；上游回傳的檔案已是 UTF-8 SRT，沒有編碼問題。
 - **缺點**：中文片源相對少（多數影片只有 1 部中文字幕，部分影片完全沒有），且上游是
   Stremio 社群服務，沒有可用性保證。
-- 若上游服務中斷，可把「來源伺服器」改成任何相容 Stremio 字幕協定的伺服器，不需改程式碼。
+
+#### 為什麼有些外掛抓不到字幕
+
+**「manifest 宣告了 `subtitles`」不等於「真的給得出字幕」。** 串流外掛為了讓 Stremio 把它
+列在字幕分類裡，經常附上一個永遠回傳空清單的空殼。實測結果：
+
+| 外掛 | 宣告 `subtitles` | 實際查詢 `tt1375666` 的結果 |
+| --- | --- | --- |
+| OpenSubtitles v3 | 是 | **90 筆** |
+| PenguPlay | 是 | **0 筆**（串流外掛，字幕資源是空殼） |
+| SubSense | 是 | **HTTP 404**（未設定的安裝網址無效，需先在它的設定頁選好語言） |
+
+所以設定頁提供了「**檢查來源**」按鈕：它會讀取每個外掛的 manifest，**再實際查詢一次熱門電影
+（`tt1375666`）**，並回報真正拿到的筆數，直接告訴你這個來源值不值得留。
+
+> **抓不到的東西**：串流外掛影片檔**內嵌**的字幕。Stremio 的協定不會把串流網址或檔案雜湊
+> 傳給字幕外掛（見 [stremio-core #965](https://github.com/Stremio/stremio-core/issues/965)），
+> 因此任何字幕外掛都無法讀取內嵌字幕——除非那個外掛自己另外提供 `subtitles` 資源。
 
 ### 2. OpenSubtitles.com REST API（需 API Key，中文片源較多）
 
@@ -241,12 +267,14 @@ POST https://api.opensubtitles.com/api/v1/download   { "file_id": 123456 }
 | 來源 | 取得方式 | 備註 |
 | --- | --- | --- |
 | [OpenSubtitles REST API](https://opensubtitles.com) | API Key，查詢 IMDb ID 或影片 Hash | 本專案已內建 |
-| [SubDL](https://subdl.com) | 免費 API Key，`/subtitles/movie/{imdb}` | 中文片源不錯 |
-| [SubSource](https://subsource.net) | 需申請 API Key | |
+| [SubSense](https://subsense.nepiraw.com) | 貼上**你自己的**安裝網址（需先在它的設定頁選語言） | 一次聚合 10 個來源 |
+| [SubSource Subtitles](https://subsource.net) | 貼上該外掛的安裝網址 | 需申請 API Key |
+| [SubDL Subtitles](https://subdl.com) | 貼上該外掛的安裝網址 | 需申請 API Key |
 | 影片 Hash 比對 | OpenSubtitles 的 `moviehash` 參數 | 比對較準，需先計算影片檔雜湊 |
 
-要新增來源只需在 `src/sources.js` 增加一個 `listFromXxx(cfg, type, id)` 並在
-`listSubtitles()` 分派，回傳 `{ id, url | fileId, lang, name }` 陣列即可。
+只要對方是 Stremio 字幕外掛，**不需要改任何程式碼**：把它的安裝網址貼進「上游字幕外掛」即可。
+只有在對方不是 Stremio 外掛（例如自家 API）時，才需要在 `src/sources.js` 增加一個
+`listFromXxx(cfg, type, id)` 並在 `listSubtitles()` 分派，回傳 `{ id, url | fileId, lang, name }` 陣列。
 
 ## 架設設定網站
 
@@ -288,7 +316,7 @@ src/
   srt.js             字幕分段／重組與批次併發的共用邏輯
   stats.js           快取與翻譯統計、事件匯流排、SSE 監控註冊
   langs.js           語言代碼對應（Stremio ↔ Google ↔ OpenSubtitles REST）
-  sources.js         字幕來源（v3 代理 / OpenSubtitles.com REST）
+  sources.js         字幕來源（上游外掛聚合 / OpenSubtitles.com REST / manifest 檢查）
   subtitles.js       Stremio subtitles 資源處理器
   subtitle-file.js   下載字幕、判斷編碼、轉換、回傳
   token.js           字幕檔案的不透明 token
@@ -315,9 +343,11 @@ PUB=http://localhost:3000 node test/live-google.js tt2380307   # 對真實 Googl
 
 ## 疑難排解
 
-- **Stremio 顯示「沒有字幕」**：先確認來源確實有中文字幕。v3 來源的中文片源偏少，可改用
-  OpenSubtitles.com REST API。也可直接測試
-  `https://opensubtitles-v3.strem.io/subtitles/movie/tt1375666.json` 是否回傳 `zht` 項目。
+- **Stremio 顯示「沒有字幕」**：先在設定頁按「**檢查來源**」。若某個外掛顯示「宣告有字幕，
+  但實測 0 筆」，代表它是串流外掛的空殼，請把它從清單移除。若所有來源都正常卻仍沒有中文
+  字幕，可改用 OpenSubtitles.com REST API，或設定「備援語言」讓 Google 翻譯接手。
+- **加了外掛卻沒有比較多字幕**：多數外掛共用同一批上游資料庫，重複的檔案會被去除，
+  所以數量不一定增加；要看的是「檢查來源」顯示的實際筆數。
 - **字幕變成亂碼**：外掛會依 BOM、`Content-Type`、UTF-8 有效性、最後 GBK／Big5 的順序判斷編碼；
   若仍異常，請開 issue 並附上來源網址。
 - **安裝後看不到設定按鈕**：manifest 在已有設定時會移除 `configurable`，這是正常行為；

@@ -13,8 +13,8 @@ const DEFAULTS = {
 	mode: 'auto', // 'auto' = only convert Simplified subtitles, 'always' = always convert
 	keepOriginal: false, // also expose the untouched source subtitle
 	langs: 'zht,chi,zho,chs,cht,zh-cn,zh-tw', // accepted Chinese subtitle language codes
-	provider: 'v3', // 'v3' = OpenSubtitles v3 proxy (no key), 'rest' = OpenSubtitles.com API
-	sourceUrl: 'https://opensubtitles-v3.strem.io',
+	provider: 'v3', // 'v3' = upstream Stremio addons, 'rest' = OpenSubtitles.com API
+	sources: 'https://opensubtitles-v3.strem.io', // upstream addons, comma or newline separated
 	apiKey: '', // OpenSubtitles.com API key
 	customDict: '',
 	// Machine translation, used only when no Chinese subtitle exists at all.
@@ -29,7 +29,7 @@ const KEYMAP = {
 	keepOriginal: 'k',
 	langs: 'l',
 	provider: 'p',
-	sourceUrl: 'u',
+	sources: 's',
 	apiKey: 'a',
 	customDict: 'd',
 	fallbackLangs: 'fl',
@@ -70,7 +70,7 @@ function normalizeConfig(raw) {
 	cfg.keepOriginal = cfg.keepOriginal === true || cfg.keepOriginal === 'true';
 	cfg.provider = PROVIDERS.includes(cfg.provider) ? cfg.provider : 'v3';
 	cfg.langs = String(cfg.langs || '').trim();
-	cfg.sourceUrl = String(cfg.sourceUrl || '').trim() || DEFAULTS.sourceUrl;
+	cfg.sources = String(cfg.sources || '').trim() || DEFAULTS.sources;
 	cfg.apiKey = String(cfg.apiKey || '').trim();
 	cfg.customDict = String(cfg.customDict || '');
 	cfg.fallbackLangs = String(cfg.fallbackLangs || '').trim();
@@ -93,6 +93,10 @@ function decodeConfig(encoded) {
 	for (const [long, shortKey] of Object.entries(KEYMAP)) {
 		if (raw[shortKey] !== undefined) settings[long] = raw[shortKey];
 	}
+	// `u` held a single upstream server before this became a list. Install
+	// links created back then keep working instead of silently falling back to
+	// the default source.
+	if (raw.u !== undefined && raw.s === undefined) settings.sources = raw.u;
 	return normalizeConfig(settings);
 }
 

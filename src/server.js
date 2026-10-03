@@ -9,6 +9,7 @@ const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
+const { sourceList, fetchManifest, resourceNames, listFromAddon } = require('./sources');
 const stats = require('./stats');
 const SIMPLIFIED_CHARS = require('./data/simplified-chars');
 
@@ -132,6 +133,63 @@ async function handlePreviewApi(req, res) {
 	});
 }
 
+/**
+ * A widely available film, so an empty answer says something about the addon
+ * rather than about the title.
+ */
+const PROBE_ID = 'tt1375666';
+const PROBE_TYPE = 'movie';
+
+/**
+ * POST /api/sources/check – reports what each configured upstream really offers.
+ *
+ * Declaring the `subtitles` resource in a manifest does not mean the addon
+ * returns anything for it: stream addons commonly advertise the resource and
+ * then answer every request with an empty list. So the manifest is only the
+ * first half of the check — each source is then asked for one known film, and
+ * the number of entries it actually returns is what decides whether it is
+ * worth keeping.
+ */
+async function handleSourcesCheck(req, res) {
+	let payload;
+	try {
+		payload = JSON.parse((await readBody(req)) || '{}');
+	} catch {
+		return sendJson(res, 400, { error: 'invalid JSON body' });
+	}
+
+	const cfg = normalizeConfig(payload.settings || payload);
+	const results = await Promise.all(
+		sourceList(cfg.sources).map(async (base) => {
+			const entry = { base };
+			try {
+				const manifest = await fetchManifest(base);
+				const resources = resourceNames(manifest);
+				entry.ok = true;
+				entry.id = manifest.id;
+				entry.name = manifest.name || manifest.id;
+				entry.subtitles = resources.includes('subtitles');
+				entry.resources = resources;
+			} catch (error) {
+				entry.ok = false;
+				entry.error = error.message;
+				return entry;
+			}
+			if (!entry.subtitles) return entry;
+
+			try {
+				entry.entries = (await listFromAddon(base, PROBE_TYPE, PROBE_ID)).length;
+			} catch (error) {
+				entry.entries = null;
+				entry.probeError = error.message;
+			}
+			return entry;
+		})
+	);
+
+	sendJson(res, 200, { ok: true, probeId: PROBE_ID, results });
+}
+
 /* ------------------------------------------------------------------ *
  * Live dashboard
  *
@@ -240,6 +298,9 @@ const server = http.createServer(async (req, res) => {
 		}
 		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'preview') {
 			return handlePreviewApi(req, res);
+		}
+		if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'sources' && segments[2] === 'check') {
+			return handleSourcesCheck(req, res);
 		}
 		if (segments[0] === 'api' && segments[1] === 'stats') {
 			if (req.method === 'GET' && segments[2] === 'stream') {

@@ -3,25 +3,29 @@
 /**
  * Subtitle sources.
  *
- * `v3`   – proxies the public OpenSubtitles v3 Stremio addon. No API key, no
- *          sign-up. The upstream already returns UTF-8 SRT files, which keeps
- *          this addon dependency free.
+ * Two ways to reach subtitles:
+ *
+ * `v3`   – reads any number of upstream Stremio addons over the standard
+ *          subtitle protocol (`GET {base}/subtitles/{type}/{id}.json`). No API
+ *          key, and each upstream may carry its own configuration in its base
+ *          URL, so a personalised addon install link works as-is.
  * `rest` – talks to the official OpenSubtitles.com REST API. Much better
  *          Chinese coverage, but requires a (free) API key.
  *
- * Listing returns every candidate the source offers; deciding which of them
- * are usable is the caller's job (see subtitles.js), because the addon keeps
- * two separate allow lists: Chinese subtitles for OpenCC conversion, and
- * fallback languages for machine translation.
+ * Listing returns every candidate the sources offer; deciding which of them are
+ * usable is the caller's job (see subtitles.js), because the addon keeps two
+ * separate allow lists: Chinese subtitles for OpenCC conversion, and fallback
+ * languages for machine translation.
  */
 
 const { normalizeLang, toRestCode } = require('./langs');
 
-const DEFAULT_SOURCE_URL = 'https://opensubtitles-v3.strem.io';
+const DEFAULT_SOURCE = 'https://opensubtitles-v3.strem.io';
 const REST_BASE = 'https://api.opensubtitles.com/api/v1';
 const USER_AGENT = 'OpenCC-Stremio-Subtitles v1.0';
 
 const REQUEST_TIMEOUT = 10000;
+const MANIFEST_TIMEOUT = 8000;
 
 /** Language codes that can possibly be Chinese, used when no filter is set. */
 const CHINESE_LANGS = new Set([
@@ -59,6 +63,46 @@ function fallbackAllowed(cfg, lang) {
 	return langInList(cfg.fallbackLangs, lang);
 }
 
+/**
+ * Normalises one upstream URL. People paste whatever their addon's install
+ * page gave them: a bare origin, an origin plus that addon's own config
+ * segment, or the full manifest URL. All three have to end up as the base the
+ * subtitle route is appended to.
+ */
+function addonBase(input) {
+	return String(input || '')
+		.trim()
+		.replace(/\/+$/, '')
+		.replace(/\/manifest\.json$/i, '');
+}
+
+/** The configured upstream list, in the order the viewer typed it. */
+function sourceList(value) {
+	const seen = new Set();
+	const bases = [];
+	for (const entry of String(value || '').split(/[\s,]+/)) {
+		const base = addonBase(entry);
+		if (!base || seen.has(base)) continue;
+		// Only real HTTP(S) endpoints; anything else would be a typo.
+		if (!/^https?:\/\/[^\s]+$/i.test(base)) continue;
+		seen.add(base);
+		bases.push(base);
+	}
+	return bases;
+}
+
+/** A short, recognisable tag for one upstream (`subsense.nepiraw.com` -> `subsense`). */
+function originLabel(base) {
+	try {
+		const host = new URL(base).hostname.replace(/^www\./i, '');
+		// `opensubtitles-v3.strem.io` must stay readable, so the cap only ever
+		// trims a genuinely long label and never leaves a dangling separator.
+		return host.split('.')[0].slice(0, 20).replace(/[-_.]+$/, '');
+	} catch {
+		return '';
+	}
+}
+
 /** IMDb ids look like `tt1234567` (movies) or `tt1234567:1:2` (series). */
 function sanitizeId(id) {
 	return String(id || '').replace(/[^A-Za-z0-9:._-]/g, '');
@@ -76,10 +120,30 @@ async function fetchJson(url, options = {}) {
 	return response.json();
 }
 
-async function listFromProxy(cfg, type, id) {
-	const base = String(cfg.sourceUrl || DEFAULT_SOURCE_URL).replace(/\/+$/, '');
+/** Resource names of a manifest, which may use either the string or object form. */
+function resourceNames(manifest) {
+	return (manifest.resources || [])
+		.map((entry) => (typeof entry === 'string' ? entry : entry && entry.name))
+		.filter(Boolean);
+}
+
+/** Reads an upstream addon's manifest. Also used by the source checker. */
+async function fetchManifest(base) {
+	const response = await fetch(`${addonBase(base)}/manifest.json`, {
+		headers: { Accept: 'application/json', 'User-Agent': USER_AGENT },
+		signal: AbortSignal.timeout(MANIFEST_TIMEOUT),
+	});
+	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	const manifest = await response.json();
+	if (!manifest || !manifest.id) throw new Error('回應不是有效的 addon manifest');
+	return manifest;
+}
+
+/** Asks one upstream addon for its subtitle list. */
+async function listFromAddon(base, type, id) {
 	const payload = await fetchJson(`${base}/subtitles/${type}/${sanitizeId(id)}.json`);
 	const subtitles = (payload && payload.subtitles) || [];
+	const origin = originLabel(base);
 
 	return subtitles
 		.filter((sub) => sub && sub.url)
@@ -88,6 +152,7 @@ async function listFromProxy(cfg, type, id) {
 			url: sub.url,
 			lang: normalizeLang(sub.lang),
 			name: sub.subtitleFileName || sub.movieReleaseName || '',
+			origin,
 		}));
 }
 
@@ -107,7 +172,7 @@ function restLanguages(cfg) {
 
 async function listFromRest(cfg, type, id) {
 	if (!cfg.apiKey) {
-		throw new Error('OpenSubtitles.com 需要 API Key，請在設定頁填入（或在設定頁改用免金鑰的 v3 來源）。');
+		throw new Error('OpenSubtitles.com 需要 API Key，請在設定頁填入（或在設定頁改用免金鑰的來源）。');
 	}
 
 	const [imdbId, season, episode] = String(id).split(':');
@@ -136,6 +201,7 @@ async function listFromRest(cfg, type, id) {
 			fileId: file.file_id,
 			lang: normalizeLang(attributes.language),
 			name: file.file_name || attributes.release || '',
+			origin: 'opensubtitles',
 		});
 	}
 	return results;
@@ -152,16 +218,41 @@ async function resolveDownloadLink(cfg, fileId) {
 	return payload.link;
 }
 
-/** Lists every candidate subtitle for one video, unfiltered. */
+/**
+ * Lists every candidate subtitle for one video, unfiltered.
+ *
+ * Every configured upstream is queried at the same time and the results are
+ * concatenated; one slow or broken source must not hold back the others, so
+ * failures are logged and skipped rather than thrown.
+ */
 async function listSubtitles(cfg, type, id) {
 	if (!['movie', 'series'].includes(type)) return [];
 	if (cfg.provider === 'rest') return listFromRest(cfg, type, id);
-	return listFromProxy(cfg, type, id);
+
+	const bases = sourceList(cfg.sources);
+	if (!bases.length) return [];
+
+	const settled = await Promise.allSettled(bases.map((base) => listFromAddon(base, type, id)));
+	const items = [];
+	settled.forEach((result, index) => {
+		if (result.status === 'fulfilled') {
+			items.push(...result.value);
+		} else {
+			console.warn(`[sources] ${bases[index]}: ${result.reason && result.reason.message}`);
+		}
+	});
+	return items;
 }
 
 module.exports = {
-	DEFAULT_SOURCE_URL,
+	DEFAULT_SOURCE,
 	CHINESE_LANGS,
+	addonBase,
+	sourceList,
+	originLabel,
+	resourceNames,
+	fetchManifest,
+	listFromAddon,
 	listSubtitles,
 	resolveDownloadLink,
 	normalizeLang,

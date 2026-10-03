@@ -3,6 +3,7 @@
 const { decodeConfig } = require('./config');
 const { outputLang } = require('./opencc');
 const { listSubtitles, normalizeLang, langAllowed, langList } = require('./sources');
+const { sourceList } = require('./sources');
 const { encodeToken } = require('./token');
 
 /**
@@ -64,6 +65,14 @@ function releaseLabel(name) {
 function composeLabel(kind, name) {
 	const release = releaseLabel(name);
 	return release ? `${kind} · ${release}` : kind;
+}
+
+/**
+ * `繁體中文`, or `繁體中文（subsense）` once several upstreams are configured —
+ * otherwise two entries from different addons look identical in the picker.
+ */
+function withOrigin(kind, item, showOrigin) {
+	return showOrigin && item.origin ? `${kind}（${item.origin}）` : kind;
 }
 
 /**
@@ -129,13 +138,14 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 	// configured, so an empty list is the only switch needed here.
 	const translatable = chinese.length ? [] : fallbackCandidates(cfg, dedupe(items));
 	const fallbackLabel = '繁體中文（Google）';
+	const showOrigin = sourceList(cfg.sources).length > 1;
 
 	for (const item of chinese) {
 		subtitles.push({
 			id: `opencc:${item.id}`,
 			url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name })}.srt`,
 			lang,
-			label: composeLabel('繁體中文', item.name),
+			label: composeLabel(withOrigin('繁體中文', item, showOrigin), item.name),
 		});
 
 		if (cfg.keepOriginal) {
@@ -143,7 +153,7 @@ async function handleSubtitles({ type, id, config, baseUrl }) {
 				id: `opencc-raw:${item.id}`,
 				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1 })}.srt`,
 				lang: normalizeLang(item.lang) || lang,
-				label: composeLabel('簡體原文', item.name),
+				label: composeLabel(withOrigin('簡體原文', item, showOrigin), item.name),
 			});
 		}
 	}
@@ -171,6 +181,7 @@ module.exports = {
 	dedupe,
 	releaseLabel,
 	composeLabel,
+	withOrigin,
 	disambiguateLabels,
 	MAX_CONVERTED_ENTRIES,
 	MAX_FALLBACK_ENTRIES,

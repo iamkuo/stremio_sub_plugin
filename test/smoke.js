@@ -17,6 +17,7 @@ const PORT = Number(process.env.PORT || 7099);
 const MOCK_PORT = PORT + 1;
 const FILE_PORT = MOCK_PORT + 1;
 const GOOGLE_PORT = PORT + 4;
+const MOCK2_PORT = PORT + 5;
 
 process.env.PORT = String(PORT);
 process.env.BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -91,10 +92,23 @@ const MOCK_IDS = {
 		contentType: 'application/x-subrip; charset=utf-8',
 		lang: 'eng',
 	},
+	// The film the source checker probes; it has to exist in at least one source.
+	tt1375666: {
+		body: SIMPLIFIED_SRT,
+		encoding: 'utf8',
+		contentType: 'application/x-subrip; charset=utf-8',
+		lang: 'zht',
+	},
 };
 
 /** A minimal OpenSubtitles-v3-compatible subtitle source. */
 const mockSource = http.createServer((req, res) => {
+	if (req.url === '/manifest.json') {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ id: 'test.first', name: 'First Source', resources: ['subtitles'], types: ['movie', 'series'] }));
+		return;
+	}
+
 	const match = /\/subtitles\/[^/]+\/([^/.]+)/.exec(req.url);
 	const id = match && match[1];
 	const file = MOCK_IDS[id];
@@ -139,6 +153,66 @@ const mockFiles = http.createServer((req, res) => {
 	res.end(iconv.encode(file.body, file.encoding));
 });
 
+/**
+ * A second upstream addon, so aggregation, cross-source dedupe, the origin tag
+ * and the "declares subtitles but serves none" case can all be exercised.
+ *
+ * It answers on `localhost` while the first one answers on `127.0.0.1`, which
+ * gives the two sources distinguishable origin labels.
+ */
+const mockSource2 = http.createServer((req, res) => {
+	const json = (payload) => {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(payload));
+	};
+
+	if (req.url === '/manifest.json') {
+		json({ id: 'test.second', name: 'Second Source', resources: ['subtitles'], types: ['movie', 'series'] });
+		return;
+	}
+	// A stream addon that merely advertises the subtitles resource, like the
+	// real ones do, while answering every request with an empty list.
+	if (req.url === '/streamonly/manifest.json') {
+		json({ id: 'test.streamonly', name: 'Stream Only', resources: ['stream'], types: ['movie'] });
+		return;
+	}
+	if (req.url.startsWith('/subtitles/movie/tt1111111')) {
+		// The first entry repeats the other source's URL and must be collapsed;
+		// the second is unique to this source and must survive.
+		json({
+			subtitles: [
+				{
+					id: 'dup',
+					url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111`,
+					lang: 'zht',
+					subtitleFileName: 'Coco.2017.1080p.srt',
+				},
+				{
+					id: 'second-only',
+					url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111?src=2`,
+					lang: 'zht',
+					subtitleFileName: 'Coco.2017.2160p.REMUX.srt',
+				},
+			],
+		});
+		return;
+	}
+	if (req.url.startsWith('/subtitles/movie/tt9999999')) {
+		json({
+			subtitles: [
+				{
+					id: 'only2',
+					url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111?src=2`,
+					lang: 'zht',
+					subtitleFileName: 'Only.From.Second.srt',
+				},
+			],
+		});
+		return;
+	}
+	json({ subtitles: [] });
+});
+
 /** Records every Google request so the test can assert on batching. */
 const googleCalls = [];
 /** Set above 0 to make the mock Google endpoint fail, like rate limiting does. */
@@ -177,15 +251,17 @@ const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/goog
 const { clampFallbackLimit, MAX_FALLBACK_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
 const { toGoogleSource, toGoogleTarget } = require('../src/langs');
-	const { composeLabel, releaseLabel, disambiguateLabels, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
+const { sourceList, addonBase, originLabel } = require('../src/sources');
+	const { composeLabel, releaseLabel, disambiguateLabels, withOrigin, RELEASE_LABEL_LIMIT } = require('../src/subtitles');
 
 const BASE = `http://127.0.0.1:${PORT}`;
 const SOURCE_URL = `http://127.0.0.1:${MOCK_PORT}`;
+const SOURCE2_URL = `http://localhost:${MOCK2_PORT}`;
 const CFG = encodeConfig({
 	from: 'cn',
 	to: 'twp',
 	provider: 'v3',
-	sourceUrl: SOURCE_URL,
+	sources: SOURCE_URL,
 	keepOriginal: true,
 });
 
@@ -287,6 +363,23 @@ function unitTests() {
 	assert.deepStrictEqual(parseTranslations(['a', 'b']), ['a', 'b']);
 	assert.deepStrictEqual(parseTranslations([['a', 'fr']]), ['a'], 'sl=auto answers with pairs');
 
+// Upstream URL handling: a bare origin, a config segment or a manifest all work.
+assert.deepStrictEqual(sourceList('https://a.example.com'), ['https://a.example.com']);
+assert.deepStrictEqual(sourceList('https://a.example.com/cfg/manifest.json'), ['https://a.example.com/cfg']);
+assert.deepStrictEqual(sourceList('https://a.example.com, https://a.example.com'), ['https://a.example.com'], 'duplicates collapse');
+assert.deepStrictEqual(sourceList('not a url'), [], 'non-HTTP entries are dropped');
+assert.strictEqual(addonBase('https://x.example.com/cfg/'), 'https://x.example.com/cfg');
+assert.strictEqual(originLabel('https://subsense.nepiraw.com/abc'), 'subsense');
+assert.strictEqual(originLabel('not a url'), '');
+
+// The origin tag only appears once more than one upstream is configured.
+assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, false), '繁體中文');
+assert.strictEqual(withOrigin('繁體中文', { origin: 'subsense' }, true), '繁體中文（subsense）');
+
+// Install links that predate the upstream list keep their source.
+const legacy = Buffer.from(JSON.stringify({ u: 'https://legacy.example.com' }), 'utf8').toString('base64url');
+assert.strictEqual(decodeConfig(legacy).sources, 'https://legacy.example.com');
+
 	// The fallback list length is clamped to a sane range.
 	assert.strictEqual(clampFallbackLimit(undefined), 1);
 	assert.strictEqual(clampFallbackLimit(3), 3);
@@ -315,6 +408,8 @@ async function httpTests() {
 	assert.strictEqual(page.status, 200);
 	assert.ok(page.body.includes('OpenCC 轉換設定'));
 	assert.ok(page.body.includes('備援翻譯'), 'the config page must expose the fallback settings');
+	assert.ok(page.body.includes('上游字幕外掛'), 'the upstream list must be present');
+	assert.ok(page.body.includes('sourceCheckBtn'), 'the source checker must be present');
 	assert.ok(page.body.includes('fallbackLimit'), 'the fallback count control must be present');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');
@@ -384,9 +479,70 @@ async function conversionTests() {
 	console.log('converted ok');
 }
 
+/**
+ * Several upstream addons at once: results are merged, a file that two sources
+ * both list is collapsed, a broken source does not take the others down, and
+ * every entry names the addon it came from.
+ */
+async function multiSourceTests() {
+const both = encodeConfig({ provider: 'v3', sources: `${SOURCE_URL}, ${SOURCE2_URL}`, to: 'twp' });
+
+const list = await getJson(`/${both}/subtitles/movie/tt1111111.json`);
+assert.strictEqual(list.json.subtitles.length, 2, 'the URL both sources share must be collapsed');
+const labels = list.json.subtitles.map((sub) => sub.label);
+assert.ok(labels.some((label) => label.startsWith('繁體中文（127）')), 'the first upstream must be named');
+assert.ok(labels.some((label) => label.startsWith('繁體中文（localhost）')), 'the second upstream must be named');
+
+// Every merged entry must still be downloadable and converted.
+for (const sub of list.json.subtitles) {
+const file = await get(new URL(sub.url).pathname);
+assert.strictEqual(file.status, 200);
+assert.ok(!looksSimplified(file.body), 'the merged entry must be converted, not passed through');
+}
+
+// A subtitle only one of the addons carries is still found.
+const secondOnly = await getJson(`/${both}/subtitles/movie/tt9999999.json`);
+assert.strictEqual(secondOnly.json.subtitles.length, 1);
+assert.ok(secondOnly.json.subtitles[0].label.startsWith('繁體中文（localhost）'));
+
+// One dead source must not stop the others from answering.
+const withDead = encodeConfig({ provider: 'v3', sources: `http://127.0.0.1:1, ${SOURCE_URL}`, to: 'twp' });
+const survived = await getJson(`/${withDead}/subtitles/movie/tt1111111.json`);
+assert.ok(survived.json.subtitles.length > 0, 'a dead source must not take the others down');
+
+// A pasted manifest URL is accepted as-is.
+const asManifest = encodeConfig({ provider: 'v3', sources: `${SOURCE_URL}/manifest.json`, to: 'twp' });
+const viaManifest = await getJson(`/${asManifest}/subtitles/movie/tt1111111.json`);
+assert.ok(viaManifest.json.subtitles.length > 0, 'a manifest URL must work');
+
+// A single upstream keeps the plain label, without an origin tag.
+const single = await getJson(`/${encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp' })}/subtitles/movie/tt1111111.json`);
+assert.ok(single.json.subtitles.every((sub) => !sub.label.includes('（')), 'a single source must not be tagged');
+
+// The source checker reports what each upstream really offers.
+const check = await post('/api/sources/check', {
+settings: { sources: `${SOURCE_URL}, ${SOURCE2_URL}, ${SOURCE2_URL}/streamonly` },
+});
+assert.strictEqual(check.json.results.length, 3);
+	const [first, second, streamOnly] = check.json.results;
+	assert.strictEqual(first.name, 'First Source');
+	assert.strictEqual(first.subtitles, true);
+	assert.ok(first.entries > 0, 'a working source must report the entries it returns');
+	assert.strictEqual(second.name, 'Second Source');
+	assert.strictEqual(second.subtitles, true);
+	assert.strictEqual(second.entries, 0, 'declaring the resource but serving nothing must be called out');
+	assert.strictEqual(streamOnly.subtitles, false, 'a stream addon must be reported as having no subtitles');
+
+const unreachable = await post('/api/sources/check', { settings: { sources: 'http://127.0.0.1:1' } });
+assert.strictEqual(unreachable.json.results[0].ok, false);
+assert.ok(unreachable.json.results[0].error, 'the reason must be reported');
+
+console.log('multi     ok');
+}
+
 async function googleFallbackTests() {
 	// Google needs no key, so the fallback works with nothing configured.
-	const auto = encodeConfig({ provider: 'v3', sourceUrl: SOURCE_URL, to: 'twp', fallbackLangs: 'eng' });
+	const auto = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp', fallbackLangs: 'eng' });
 	const list = await getJson(`/${auto}/subtitles/movie/tt4444444.json`);
 	assert.strictEqual(list.json.subtitles.length, 1);
 	assert.ok(list.json.subtitles[0].id.startsWith('machine:'), 'fallback entries must be marked as translated');
@@ -417,7 +573,7 @@ async function googleFallbackTests() {
 	assert.ok(withChinese.json.subtitles.every((sub) => sub.id.startsWith('opencc')));
 
 	// An empty fallback language list disables the feature entirely.
-	const noFallback = encodeConfig({ provider: 'v3', sourceUrl: SOURCE_URL, fallbackLangs: '' });
+	const noFallback = encodeConfig({ provider: 'v3', sources: SOURCE_URL, fallbackLangs: '' });
 	assert.deepStrictEqual((await getJson(`/${noFallback}/subtitles/movie/tt4444444.json`)).json, { subtitles: [] });
 
 	// A failing endpoint yields a readable error, not a broken subtitle.
@@ -433,7 +589,7 @@ async function googleFallbackTests() {
 
 	const triple = encodeConfig({
 		provider: 'v3',
-		sourceUrl: SOURCE_URL,
+		sources: SOURCE_URL,
 		to: 'twp',
 		fallbackLangs: 'eng',
 		fallbackLimit: 3,
@@ -442,7 +598,7 @@ async function googleFallbackTests() {
 
 	const capped = encodeConfig({
 		provider: 'v3',
-		sourceUrl: SOURCE_URL,
+		sources: SOURCE_URL,
 		to: 'twp',
 		fallbackLangs: 'eng',
 		fallbackLimit: 99,
@@ -536,11 +692,13 @@ async function liveTest() {
 async function main() {
 	await new Promise((resolve) => mockSource.listen(MOCK_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockFiles.listen(FILE_PORT, '127.0.0.1', resolve));
+	await new Promise((resolve) => mockSource2.listen(MOCK2_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockGoogle.listen(GOOGLE_PORT, '127.0.0.1', resolve));
 
 	unitTests();
 	await httpTests();
 	await conversionTests();
+	await multiSourceTests();
 	await googleFallbackTests();
 	await statsTests();
 	await liveTest();
