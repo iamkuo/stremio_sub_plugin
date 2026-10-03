@@ -261,7 +261,7 @@
 			<div class="field">
 				<label for="fallbackLimit">備援字幕數量</label>
 				<input type="number" id="fallbackLimit" min="1" max="5" step="1">
-				<div class="hint">候選常有數十個版本卻無法區分，預設只留 1 筆。</div>
+				<div class="hint">與每種語言一樣預設 3 筆，上限 5 筆。</div>
 			</div>
 		</div>
 	</div>
@@ -446,7 +446,7 @@ function readForm() {
 	state.apiKey = el('apiKey').value;
 	state.langs = el('langs').value;
 	state.fallbackLangs = el('fallbackLangs').value;
-	state.fallbackLimit = Number(el('fallbackLimit').value) || 1;
+	state.fallbackLimit = Number(el('fallbackLimit').value) || 3;
 	state.perLanguageLimit = Number(el('perLanguageLimit').value) || 3;
 	state.fpsMode = el('fpsMode').value;
 }

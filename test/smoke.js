@@ -466,7 +466,7 @@ function unitTests() {
 	assert.ok(presets.every((preset) => preset.label && preset.note), 'every preset needs a label and an explanation');
 
 	// The fallback list length is clamped to a sane range.
-	assert.strictEqual(clampFallbackLimit(undefined), 1);
+	assert.strictEqual(clampFallbackLimit(undefined), 3, 'the default is three');
 	assert.strictEqual(clampFallbackLimit(3), 3);
 	assert.strictEqual(clampFallbackLimit(0), 1);
 	assert.strictEqual(clampFallbackLimit(99), MAX_FALLBACK_LIMIT);
@@ -834,18 +834,18 @@ async function googleFallbackTests() {
 	assert.strictEqual(failingFile.status, 502);
 	assert.ok(failingFile.body.includes('Google 翻譯失敗'), 'the error must name the cause');
 
-	// The fallback list length is configurable and defaults to a single entry.
-	const single = await getJson(`/${auto}/subtitles/movie/tt7777777.json`);
-	assert.strictEqual(single.json.subtitles.length, 1, 'only one fallback entry by default');
+	// The fallback list length defaults to three, like every other language.
+	const defaulted = await getJson(`/${auto}/subtitles/movie/tt7777777.json`);
+	assert.strictEqual(defaulted.json.subtitles.length, 3, 'three fallback entries by default');
 
-	const triple = encodeConfig({
+	const one = encodeConfig({
 		provider: 'v3',
 		sources: SOURCE_URL,
 		to: 'twp',
 		fallbackLangs: 'eng',
-		fallbackLimit: 3,
+		fallbackLimit: 1,
 	});
-	assert.strictEqual((await getJson(`/${triple}/subtitles/movie/tt7777777.json`)).json.subtitles.length, 3);
+	assert.strictEqual((await getJson(`/${one}/subtitles/movie/tt7777777.json`)).json.subtitles.length, 1);
 
 	const capped = encodeConfig({
 		provider: 'v3',

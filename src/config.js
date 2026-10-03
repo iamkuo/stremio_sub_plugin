@@ -22,7 +22,7 @@ const DEFAULTS = {
 	customDict: '',
 	// Machine translation, used only when no Chinese subtitle exists at all.
 	fallbackLangs: 'eng', // source languages to translate from, e.g. 'eng,jpn'
-	fallbackLimit: 1, // how many fallback candidates to offer; 1 keeps the picker minimal
+	fallbackLimit: 3, // how many machine-translated candidates to offer
 	// Frame-rate correction, applied when a subtitle was timed for a different
 	// frame rate than the file being played. 'auto' only corrects the direction
 	// that cannot be a false positive (see src/fps.js).
