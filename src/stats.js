@@ -34,6 +34,8 @@ const counters = {
 	cacheEntries: 0,
 	fpsCorrections: 0,
 	lastFpsFactor: null,
+	downloadFailovers: 0,
+	lastDownloadError: null,
 	lastTranslationAt: null,
 	lastError: null,
 };
@@ -89,6 +91,25 @@ function recordFpsCorrection(factor) {
 	emitChange();
 }
 
+/**
+ * One download that a source refused, and which another source then served.
+ *
+ * Worth counting because it is invisible otherwise: the viewer just gets a
+ * subtitle, while the addon quietly stops depending on an upstream that may be
+ * down for hours.
+ */
+function recordDownloadFailover(message) {
+	counters.downloadFailovers += 1;
+	counters.lastDownloadError = message;
+	emitChange();
+}
+
+/** A download that no configured source could serve. */
+function recordDownloadError(message) {
+	counters.lastDownloadError = message;
+	emitChange();
+}
+
 /** A JSON-safe view of everything the dashboard shows. */
 function snapshot() {
 	const requests = counters.cacheHits + counters.cacheMisses;
@@ -114,6 +135,10 @@ function snapshot() {
 		timing: {
 			fpsCorrections: counters.fpsCorrections,
 			lastFpsFactor: counters.lastFpsFactor,
+		},
+		sources: {
+			failovers: counters.downloadFailovers,
+			lastError: counters.lastDownloadError,
 		},
 	};
 }
@@ -164,6 +189,8 @@ module.exports = {
 	recordCacheMiss,
 	recordCacheEntries,
 	recordFpsCorrection,
+	recordDownloadFailover,
+	recordDownloadError,
 	createWatch,
 	getWatch,
 	WATCH_TTL,

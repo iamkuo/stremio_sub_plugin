@@ -12,6 +12,9 @@
  *   `v` = name of the file being played, `rt` = film runtime in seconds. Both
  *   exist only for the frame-rate check, which cannot run until the subtitle's
  *   own length is known — i.e. on download, not while the list is built.
+ *   `y` = content type, `i` = content id, `l` = the language this file is in.
+ *   Those three exist so a download that fails can look the language up again
+ *   and try another source, without the list having to be rebuilt.
  *
  * The conversion settings always come from the config segment of the URL.
  */
@@ -26,6 +29,9 @@ function encodeToken(data) {
 	if (data.g) compact.g = data.g;
 	if (data.v) compact.v = data.v;
 	if (data.rt) compact.rt = data.rt;
+	if (data.y) compact.y = data.y;
+	if (data.i) compact.i = data.i;
+	if (data.l) compact.l = data.l;
 	return Buffer.from(JSON.stringify(compact), 'utf8').toString('base64url');
 }
 
@@ -43,6 +49,9 @@ function decodeToken(token) {
 				targetLang: raw.g,
 			videoName: raw.v,
 			runtimeSeconds: Number(raw.rt) > 0 ? Number(raw.rt) : 0,
+			type: raw.y,
+			id: raw.i,
+			lang: raw.l,
 		};
 	} catch {
 		return null;

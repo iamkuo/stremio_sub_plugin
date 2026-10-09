@@ -3,8 +3,8 @@
 const iconv = require('iconv-lite');
 const { convertSubtitle, TRADITIONAL_TARGETS } = require('./opencc');
 const { translateSubtitle } = require('./google');
-const { toGoogleSource, toGoogleTarget } = require('./langs');
-const { resolveDownloadLink } = require('./sources');
+const { toGoogleSource, toGoogleTarget, canonicalLang } = require('./langs');
+const { resolveDownloadLink, listSubtitles } = require('./sources');
 const { decodeToken } = require('./token');
 const stats = require('./stats');
 const { lastCueEnd, scaleTimings, detectFpsFactor } = require('./fps');
@@ -68,7 +68,81 @@ async function downloadSubtitle(url) {
 	});
 	if (!response.ok) throw new Error(`字幕下載失敗（HTTP ${response.status}）`);
 	const buffer = Buffer.from(await response.arrayBuffer());
-	return { buffer, contentType: response.headers.get('content-type') || '' };
+	const contentType = response.headers.get('content-type') || '';
+	// A maintenance page can arrive with a cheerful 200. A subtitle always
+	// carries at least one cue timestamp, so anything shaped like a web page is
+	// rejected here rather than parsed into zero cues and shown to the viewer as
+	// "no tracks".
+	const head = buffer.subarray(0, 2048).toString('utf8').toLowerCase();
+	if (/text\/html/i.test(contentType) || head.includes('<!doctype html') || head.includes('<html')) {
+		throw new Error('字幕下載失敗（上游回傳網頁而非字幕）');
+	}
+	return { buffer, contentType };
+}
+
+/** How many other files to try before giving up on a language. */
+const FAILOVER_ATTEMPTS = 3;
+
+function hostOf(url) {
+	try {
+		return new URL(url).host;
+	} catch {
+		return 'unknown';
+	}
+}
+
+/**
+ * Other files in the same language, looked up again across every source.
+ *
+ * The list is built from all configured sources at once, but the entry that
+ * gets picked may come from one that is having a bad day: OpenSubtitles v3
+ * answered 469 with "Site will be online soon. We are doing some necessary
+ * backups and upgrades." for every download while its search endpoint kept
+ * answering normally, which is invisible from the list and fatal from the
+ * player. Re-querying costs one round trip, and only after a download has
+ * already failed; it is what stops one dead upstream from taking a whole
+ * language down with it.
+ */
+async function alternativeUrls(cfg, handle, failedUrl) {
+	if (!handle.type || !handle.id || !handle.lang) return [];
+	let items;
+	try {
+		items = await listSubtitles(cfg, handle.type, handle.id, {});
+	} catch {
+		return [];
+	}
+	const seen = new Set([failedUrl]);
+	const urls = [];
+	for (const item of items) {
+		if (!item.url || seen.has(item.url)) continue;
+		if (canonicalLang(item.lang) !== handle.lang) continue;
+		seen.add(item.url);
+		urls.push(item.url);
+		if (urls.length >= FAILOVER_ATTEMPTS) break;
+	}
+	return urls;
+}
+
+/** Downloads a subtitle, trying another source when one cannot serve it. */
+async function downloadWithFailover(cfg, handle, url) {
+	try {
+		return await downloadSubtitle(url);
+	} catch (error) {
+		const alternatives = await alternativeUrls(cfg, handle, url);
+		for (const candidate of alternatives) {
+			try {
+				const result = await downloadSubtitle(candidate);
+				const message = `${error.message}（${hostOf(url)}）→ 改用 ${hostOf(candidate)}`;
+				console.warn(`[subtitle-file] ${message}`);
+				stats.recordDownloadFailover(message);
+				return result;
+			} catch {
+				/* the next candidate may still work */
+			}
+		}
+		stats.recordDownloadError(`${error.message}（${hostOf(url)}）`);
+		throw error;
+	}
 }
 
 /**
@@ -141,7 +215,7 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	if (!url && handle.fileId) url = await resolveDownloadLink(cfg, handle.fileId);
 	if (!url) throw Object.assign(new Error('找不到字幕來源'), { statusCode: 404 });
 
-	const { buffer, contentType } = await downloadSubtitle(url);
+	const { buffer, contentType } = await downloadWithFailover(cfg, handle, url);
 	const source = decodeBuffer(buffer, contentType);
 
 	const baseName = String(handle.name || 'subtitle').replace(/\.(srt|vtt|ass|ssa)$/i, '') || 'subtitle';

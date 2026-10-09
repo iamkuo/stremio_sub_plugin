@@ -68,6 +68,14 @@ const MOCK_IDS = {
 	tt3333333: { body: TRADITIONAL_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'zht' },
 	tt4444444: { body: ENGLISH_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'eng' },
 	tt5555555: { body: LONG_ENGLISH_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'eng' },
+	// What OpenSubtitles v3 served during its maintenance window: a web page,
+	// which must never be mistaken for a subtitle.
+	maintenance: {
+		body: '<!DOCTYPE html><html><body><pre>Site will be online soon. We are doing some necessary backups and upgrades.</pre></body></html>',
+		encoding: 'utf8',
+		contentType: 'text/html; charset=utf-8',
+		lang: 'eng',
+	},
 	// Sources routinely repeat the same file and list many releases at once.
 	tt6666666: {
 		body: SIMPLIFIED_SRT,
@@ -207,6 +215,33 @@ const mockSource2 = http.createServer((req, res) => {
 	if (req.url.startsWith('/needsconfig/subtitles/')) {
 		res.writeHead(404);
 		res.end('Not Found');
+		return;
+	}
+	// The first file is gone (404) and the second is fine, which is what an
+	// upstream going down for maintenance looks like from here.
+	if (req.url.startsWith('/subtitles/movie/tt5555555')) {
+		json({
+			subtitles: [
+				{
+					id: 'gone',
+					url: `http://127.0.0.1:${FILE_PORT}/download/dead-file`,
+					lang: 'zht',
+					subtitleFileName: 'Gone.2019.1080p.srt',
+				},
+				{
+					id: 'page',
+					url: `http://127.0.0.1:${FILE_PORT}/download/maintenance`,
+					lang: 'zht',
+					subtitleFileName: 'Maintenance.2019.1080p.srt',
+				},
+				{
+					id: 'alive',
+					url: `http://127.0.0.1:${FILE_PORT}/download/tt1111111`,
+					lang: 'zht',
+					subtitleFileName: 'Alive.2019.1080p.srt',
+				},
+			],
+		});
 		return;
 	}
 	if (req.url.startsWith('/subtitles/movie/tt1111111')) {
@@ -831,6 +866,34 @@ assert.strictEqual(check.json.results.length, 3);
 	console.log('multi     ok');
 }
 
+/**
+ * One upstream refusing a file must not cost the viewer the language.
+ *
+ * OpenSubtitles v3 answered 469 "Site will be online soon" for every download
+ * while its search endpoint kept working, so the list looked healthy and only
+ * the chosen entry failed. The language is looked up again and served from
+ * whichever other file still works.
+ */
+async function failoverTests() {
+	const cfg = encodeConfig({ provider: 'v3', sources: SOURCE2_URL, to: 'twp' });
+	const list = (await getJson(`/${cfg}/subtitles/movie/tt5555555.json`)).json.subtitles;
+	assert.strictEqual(list.length, 3, 'every candidate must be listed');
+
+	// The first entry points at a file that no longer exists, and the second is
+	// the maintenance page upstream served with a 200 while its list worked.
+	const served = await fetch(list[0].url);
+	assert.strictEqual(served.status, 200, 'a dead file must be replaced, not surfaced as an error');
+	const body = await served.text();
+	assert.ok(body.includes('-->'), 'and what comes back must be a real subtitle');
+	assert.ok(!body.includes('下載失敗'), 'never an error page');
+
+	const snapshot = (await post('/api/stats/once', { settings: {} })).json;
+	assert.ok(snapshot.sources.failovers >= 1, 'the failover must be counted');
+	assert.ok(snapshot.sources.lastError, 'and the reason it was needed must be kept');
+
+	console.log('failover  ok');
+}
+
 async function googleFallbackTests() {
 	// Google needs no key, so the fallback works with nothing configured.
 	const auto = encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp', fallbackLangs: 'eng' });
@@ -1024,11 +1087,11 @@ async function main() {
 	await new Promise((resolve) => mockFiles.listen(FILE_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockSource2.listen(MOCK2_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockGoogle.listen(GOOGLE_PORT, '127.0.0.1', resolve));
-
 	unitTests();
 	await httpTests();
 	await conversionTests();
 	await multiSourceTests();
+	await failoverTests();
 	await googleFallbackTests();
 	await statsTests();
 	await liveTest();

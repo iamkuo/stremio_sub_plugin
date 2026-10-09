@@ -236,6 +236,12 @@
 			「檢查來源」會讀 manifest，<strong>並實際查一次熱門電影</strong>，
 			因此能分辨「宣告有字幕卻永遠回空清單」的外掛。
 		</div>
+		<div class="hint">
+			<strong>建議至少設兩個來源。</strong>上游會臨時維修——OpenSubtitles v3 曾經搜尋正常、
+			但每個檔案都回 <code>469</code> 維護頁，播放器只會顯示「載入字幕時出錯: no tracks」。
+			此時外掛會<strong>立刻改用其他來源的同語言檔案</strong>（下載失敗自動換手），
+			但前提是還有別的來源可換；只有一個來源時就無從換起。
+		</div>
 		<div class="stats" id="sourceReport" hidden></div>
 		<div class="field" id="apiKeyField" hidden>
 			<label for="apiKey">OpenSubtitles.com API Key</label>
@@ -949,6 +955,11 @@ function renderStats(snapshot) {
 			'時間軸校正',
 			`${formatNumber((snapshot.timing || {}).fpsCorrections)} 個字幕`,
 			(snapshot.timing || {}).lastFpsFactor ? `最近套用倍率 ${(snapshot.timing || {}).lastFpsFactor}` : '尚未觸發'
+		),
+		statTile(
+			'來源換手',
+			`${formatNumber((snapshot.sources || {}).failovers)} 次`,
+			(snapshot.sources || {}).lastError || '所有來源都正常'
 		),
 		statTile('服務啟動時間', formatDuration(snapshot.uptimeSeconds), '重新部署後統計會歸零'),
 	].join('');

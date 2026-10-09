@@ -245,24 +245,41 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 			const name = traditionalName(item.name, cfg);
 			const mark = best ? '✓ ' : '';
 
-			if (code === 'zh') {
-				subtitles.push({
-					id: `opencc:${item.id}`,
-					url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, ...timing })}.srt`,
-					lang: chineseLang,
-					label: composeLabel(mark + withOrigin(convertedLabel(cfg), item, showOrigin), name),
-				});
-				continue;
-			}
+				if (code === 'zh') {
+					subtitles.push({
+						id: `opencc:${item.id}`,
+						url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
+							u: item.url,
+							f: item.fileId,
+							n: item.name,
+							y: type,
+							i: id,
+							l: code,
+							...timing,
+						})}.srt`,
+						lang: chineseLang,
+						label: composeLabel(mark + withOrigin(convertedLabel(cfg), item, showOrigin), name),
+					});
+					continue;
+				}
 
-			// Any other language is listed as it is: the file is proxied for
-			// encoding normalisation only, and keeps its original language.
-			subtitles.push({
-				id: `native:${item.id}`,
-				url: `${baseUrl}/srt/${pathSegment}/${encodeToken({ u: item.url, f: item.fileId, n: item.name, r: 1, ...timing })}.srt`,
-				lang: normalizeLang(item.lang) || code,
-				label: composeLabel(mark + withOrigin(languageName(code), item, showOrigin), name),
-			});
+				// Any other language is listed as it is: the file is proxied for
+				// encoding normalisation only, and keeps its original language.
+				subtitles.push({
+					id: `native:${item.id}`,
+					url: `${baseUrl}/srt/${pathSegment}/${encodeToken({
+						u: item.url,
+						f: item.fileId,
+						n: item.name,
+						r: 1,
+						y: type,
+						i: id,
+						l: code,
+						...timing,
+					})}.srt`,
+					lang: normalizeLang(item.lang) || code,
+					label: composeLabel(mark + withOrigin(languageName(code), item, showOrigin), name),
+				});
 		}
 	};
 
@@ -287,6 +304,12 @@ async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 					x: 1,
 					s: normalizeLang(item.lang),
 					g: target,
+					// A translated entry is served from a file in `s`, so a
+					// failed download looks for a replacement in that language,
+					// not in the language it is translated into.
+					y: type,
+					i: id,
+					l: canonicalLang(item.lang),
 					...timing,
 				})}.srt`,
 				lang: code === 'zh' ? chineseLang : code,
