@@ -502,6 +502,13 @@ PUB=http://localhost:3000 node test/live-google.js tt2380307   # 對真實 Googl
 - **Windows 桌面版完全沒反應（好像沒有送出任何請求）**：設定頁的「**所有進來的請求**」
   就是為了這個情況而存在。先看那裡：
 
+  最常見的原因是**安裝根本沒有完成**，而源頭通常是 `stremio://` 連結：那個通訊協定
+  在某些 Windows 安裝（尤其是 Microsoft Store 版）沒有註冊成功，按下之後毫無反應，
+  Stremio 卻不會顯示任何錯誤。**最保險的安裝方式是複製 Manifest 網址，貼進 Stremio
+  「附加元件」頁的搜尋框再按 Enter**——這條路完全不經過 `stremio://`。
+  外掛的 manifest 也刻意**不設 `configurationRequired`**，所以沒有任何設定的
+  `…/manifest.json` 可以直接安裝、用預設值運作，不需要先經過設定頁。
+
   | 看到什麼 | 代表什麼 |
   | --- | --- |
   | 連 `manifest` 都沒有 | 該用戶端根本沒連上這個服務。問題在安裝（`stremio://` 連結沒生效、

@@ -589,7 +589,11 @@ async function httpTests() {
 		undefined,
 		'no idPrefixes: narrowing it means the client never asks about other content at all'
 	);
-	assert.strictEqual(manifest.json.behaviorHints.configurationRequired, true);
+	// The plain manifest must be installable as-is: `configurationRequired`
+	// would force every install through the `stremio://` handler, which fails
+	// silently on some Windows setups and leaves a client that never calls us.
+	assert.strictEqual(manifest.json.behaviorHints.configurationRequired, undefined);
+	assert.strictEqual(manifest.json.behaviorHints.configurable, true);
 	assert.strictEqual(manifest.json.logo, `${BASE}/logo.png`, 'logo must be self-hosted and absolute');
 
 	const logo = await get('/logo.png');
@@ -610,6 +614,7 @@ async function httpTests() {
 	assert.ok(page.body.includes('id="secondary"'), 'the secondary language control must be present');
 	assert.ok(page.body.includes('id="primaryPicker"') && page.body.includes('id="secondaryPicker"'), 'both tiers need a picker');
 	assert.ok(page.body.includes('id="translatePicker"'), 'the translation source needs a picker too');
+	assert.ok(page.body.includes('id="plainUrl"'), 'the plain install URL must be offered');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
 	assert.ok(page.body.includes('所有進來的請求'), 'the all-requests panel must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');

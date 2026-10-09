@@ -353,6 +353,12 @@
 
 	<div class="card">
 		<h2>安裝</h2>
+		<p class="hint" style="margin-top:-6px">
+			最保險的方式是<strong>複製下面的網址，貼進 Stremio「附加元件」頁的搜尋框</strong>再按 Enter。
+			這條路不經過 <code>stremio://</code> 通訊協定，所以在任何系統上都成立；
+			若你按「安裝到 Stremio」之後毫無反應，那就是該通訊協定在你的電腦上沒有註冊成功，
+			而不是外掛有問題。
+		</p>
 		<div class="row">
 			<a class="btn" id="installBtn" href="#">安裝到 Stremio</a>
 			<a class="btn secondary" id="webInstallBtn" href="#" target="_blank" rel="noopener">用網頁版 Stremio 安裝</a>
@@ -362,7 +368,15 @@
 			<code id="manifestUrl">…</code>
 		</div>
 		<div class="hint" id="installHint">
-			按下「安裝到 Stremio」後，系統會以目前的設定建立一個專屬的 addon 網址；設定不同即為不同的安裝項目，可同時安裝多組。
+			這個網址已經包含目前的所有設定；設定不同即為不同的安裝項目，可同時安裝多組。
+		</div>
+		<div class="field" style="margin-top:14px">
+			<label>還不想調設定？直接貼這一個</label>
+			<code style="display:block; word-break:break-all; font-size:12px; padding:6px 0" id="plainUrl">…</code>
+			<div class="hint">
+				沒有任何設定的網址，用預設值運作：OpenCC <code>cn→twp</code>、主要語言中文、
+				每種語言 3 筆、翻譯來源英文。先用它確認裝得起來、字幕出得來，再回來調設定。
+			</div>
 		</div>
 		<div class="field" style="margin-top:14px">
 			<label for="configureUrl">設定頁網址（可加入書籤）</label>
@@ -683,6 +697,7 @@ async function refreshLinks() {
 		// correct both behind a proxy and on the published domain.
 		const manifestUrl = `${location.origin}${result.manifestPath}`;
 		el('manifestUrl').textContent = manifestUrl;
+		el('plainUrl').textContent = `${location.origin}/manifest.json`;
 		el('configureUrl').textContent = `${location.origin}${result.configurePath}`;
 		el('installBtn').href = `stremio://${location.host}${result.manifestPath}`;
 		el('webInstallBtn').href = `https://web.stremio.com/#/addons?addon=${encodeURIComponent(manifestUrl)}`;

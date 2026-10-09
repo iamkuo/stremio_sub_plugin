@@ -22,7 +22,13 @@ const manifest = {
 	catalogs: [],
 	behaviorHints: {
 		configurable: true,
-		configurationRequired: true,
+		// Deliberately not `configurationRequired`. That flag replaces the
+		// Install button with a Configure button, which forces every user
+		// through the `stremio://` protocol handler — and that handler silently
+		// does nothing on some Windows installs, leaving the addon looking
+		// installed while the client never contacts the server once. The
+		// defaults are usable on their own, so the plain manifest URL installs
+		// directly and Configure stays available next to it.
 	},
 };
 
