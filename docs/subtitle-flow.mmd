@@ -39,9 +39,13 @@ flowchart TD
   TOKEN --> PICK(["使用者選了其中一筆"])
   PICK --> WHICH{"token 記的是<br/>哪一種處理？"}
 
-  WHICH -->|"原樣"| RAW["直接送出<br/>只修正檔案編碼"]
-  WHICH -->|"翻譯"| TRANS["下載字幕 → Google 翻譯"]
-  WHICH -->|"轉換"| CONV["下載字幕 → OpenCC 轉換"]
+  WHICH -->|"原樣"| DL
+  WHICH -->|"翻譯"| DL
+  WHICH -->|"轉換"| DL
+  DL["下載字幕檔<br/>失敗時重新查詢所有來源<br/>改用同語言的其他檔案"]
+  DL --> RAW["直接送出<br/>只修正檔案編碼"]
+  DL --> TRANS["Google 翻譯"]
+  DL --> CONV["OpenCC 轉換"]
 
   CONV --> AUTO{"模式 auto 且<br/>看起來不像簡體？"}
   AUTO -->|"是，已經是繁體"| PASSTHRU["原樣送出<br/>一個字都不改"]
@@ -64,5 +68,5 @@ flowchart TD
   classDef none fill:#f4f4f6,stroke:#9aa0ab,color:#4a4f57
   class FETCH,DEDUP,GROUP,EACH,E_ZH,E_NATIVE,E_NATIVE2,E_MACHINE,TOKEN list
   class TIER,P_HAS,LIST_ZH,P_LANG,CAN,S_HAS,WHICH,AUTO,TGT decide
-  class RAW,TRANS,CONV,PASSTHRU,CONVERTED,LOCALISE,TBODY,FPS,DONE serve
+  class DL,RAW,TRANS,CONV,PASSTHRU,CONVERTED,LOCALISE,TBODY,FPS,DONE serve
   class NONE,SKIP none
