@@ -316,6 +316,24 @@
 	</div>
 
 	<div class="card">
+		<h2>所有進來的請求</h2>
+		<p class="hint" style="margin-top:-6px">
+			不分種類，列出這個服務最近收到的每一個請求，包含客戶端送出的 <strong>User-Agent</strong>。
+			當外掛在某個 Stremio 用戶端（例如 Windows 桌面版）「完全沒反應」時，
+			先看這裡：如果連 <code>manifest</code> 都沒有出現，代表該用戶端根本沒有連上這個服務，
+			問題在安裝或網路，不在外掛本身。
+		</p>
+		<div id="hitLog"><div class="hint">載入中…</div></div>
+		<div class="row" style="margin-top:14px">
+			<button class="btn secondary" id="hitRefreshBtn" type="button">重新整理</button>
+		</div>
+		<div class="hint">
+			保留最近 50 筆，重新部署即清空。同樣的紀錄也會寫進服務的正式站日誌，
+			那份紀錄不會因為重新部署而消失。
+		</div>
+	</div>
+
+	<div class="card">
 		<h2>即時預覽</h2>
 		<div class="field">
 		<textarea id="sample" spellcheck="false">1
@@ -527,6 +545,7 @@ async function loadRequests() {
 	try {
 		const data = await (await fetch('api/requests')).json();
 		const rows = data.requests || [];
+		renderHits(data.hits || []);
 		box.textContent = '';
 		if (!rows.length) {
 			const empty = document.createElement('div');
@@ -554,6 +573,39 @@ async function loadRequests() {
 		}
 	} catch {
 		box.textContent = '讀取失敗。';
+	}
+}
+
+/**
+ * Shows every request of any kind, with the client that sent it.
+ *
+ * This is the first thing to look at when one Stremio client does not work:
+ * a client that never connects leaves no trace anywhere else, and the
+ * User-Agent is what tells the desktop app apart from the web app.
+ */
+function renderHits(rows) {
+	const box = el('hitLog');
+	box.textContent = '';
+	if (!rows.length) {
+		const empty = document.createElement('div');
+		empty.className = 'hint';
+		empty.textContent = '還沒有收到任何請求。若你剛在 Stremio 裡操作過，請按「重新整理」；仍然是空的，代表該用戶端沒有連上這個服務。';
+		box.append(empty);
+		return;
+	}
+	for (const row of rows) {
+		const line = document.createElement('div');
+		line.className = 'reqline';
+		const when = document.createElement('span');
+		when.className = 'when';
+		when.textContent = new Date(row.at).toLocaleTimeString();
+		const what = document.createElement('span');
+		what.className = 'what';
+		what.textContent = `${row.kind} · ${row.status}`;
+		const rest = document.createElement('span');
+		rest.textContent = `${row.path}　${row.userAgent || '（沒有 User-Agent）'}`;
+		line.append(when, what, rest);
+		box.append(line);
 	}
 }
 
@@ -865,6 +917,10 @@ el('dashRefreshBtn').addEventListener('click', () => {
 	if (statsSource) refreshStatsOnce();
 	else startStats();
 });
+// Both lists come from the same endpoint, so one refresh updates both. The
+// subtitle-request button had never been wired at all.
+el('requestRefreshBtn').addEventListener('click', loadRequests);
+el('hitRefreshBtn').addEventListener('click', loadRequests);
 
 el('copyBtn').addEventListener('click', async () => {
 	try {

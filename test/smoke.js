@@ -583,6 +583,12 @@ async function httpTests() {
 	assert.strictEqual(manifest.status, 200);
 	assert.deepStrictEqual(manifest.json.resources, ['subtitles']);
 	assert.deepStrictEqual(manifest.json.types, ['movie', 'series']);
+	assert.deepStrictEqual(manifest.json.resources, ['subtitles']);
+	assert.strictEqual(
+		manifest.json.idPrefixes,
+		undefined,
+		'no idPrefixes: narrowing it means the client never asks about other content at all'
+	);
 	assert.strictEqual(manifest.json.behaviorHints.configurationRequired, true);
 	assert.strictEqual(manifest.json.logo, `${BASE}/logo.png`, 'logo must be self-hosted and absolute');
 
@@ -605,6 +611,7 @@ async function httpTests() {
 	assert.ok(page.body.includes('id="primaryPicker"') && page.body.includes('id="secondaryPicker"'), 'both tiers need a picker');
 	assert.ok(page.body.includes('id="translatePicker"'), 'the translation source needs a picker too');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
+	assert.ok(page.body.includes('所有進來的請求'), 'the all-requests panel must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');
 	assert.ok(!page.body.includes('__SETTINGS__'), 'settings must be injected into the page');
 
@@ -723,6 +730,17 @@ async function conversionTests() {
 	assert.ok(recorded, 'subtitle requests must be recorded');
 	assert.strictEqual(recorded.extras.videoHash, '8e245d9679d31e12');
 	assert.ok(recorded.keys.includes('filename'), 'every received argument must be listed');
+
+	// Every request is logged, whatever the route, so that a client which never
+	// connects can be told apart from one whose requests are failing. The
+	// subtitle log alone cannot show that: it only sees requests that arrived.
+	const hits = log.json.hits || [];
+	assert.ok(hits.length >= 2, 'the manifest and the subtitle list must both be logged');
+	assert.ok(hits.some((entry) => entry.kind === 'manifest'), 'the manifest request must be logged');
+	assert.ok(hits.some((entry) => entry.kind === 'subtitles'), 'the subtitle request must be logged');
+	assert.ok(hits.every((entry) => entry.status === 200), 'each entry must carry its status');
+	assert.ok(hits.every((entry) => typeof entry.userAgent === 'string'), 'each entry must carry the client');
+	assert.ok(hits[0].at >= hits[hits.length - 1].at, 'newest first');
 
 	console.log('converted ok');
 }

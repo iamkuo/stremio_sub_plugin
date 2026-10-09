@@ -1,26 +1,36 @@
 'use strict';
 
 /**
- * The extra arguments Stremio appends to resource requests.
+ * Two request logs, answering two different questions.
  *
- * The protocol carries them as a query string glued into the path:
+ * 1. `recordRequest` — what the client *sent* on a subtitle request. The extra
+ *    arguments carry the file hash, its size and its name, which are the only
+ *    way to tell which release is playing and therefore which subtitle will
+ *    have timing that lines up.
  *
- *   /subtitles/movie/tt1375666/videoHash=8e245…&videoSize=1632…&filename=…json
+ * 2. `recordHit` — every request of any kind, with its User-Agent and status.
+ *    This answers "did the client reach us at all, and as what". It is the
+ *    question to ask when an addon works in one Stremio client and not in
+ *    another, because a client that never connects leaves no other trace.
  *
- * For subtitles those arguments matter more than for any other resource: the
- * file hash, its size and its name are the only way to tell *which release* is
- * playing, and therefore the only way to pick a subtitle whose timing lines up.
- *
- * Whether a given client actually sends them is not guaranteed — that depends
- * on the app and its version — so every request is recorded here and shown on
- * the config page. That turns "does Stremio send the filename?" from a guess
- * into something you can look at.
+ * Both are in memory only: these are diagnostics, not user data. The platform's
+ * published logs carry the same information and outlive a container restart,
+ * which is why every request is also written to stdout.
  */
 
-/** How many recent requests to remember for the config page. */
+/** How many recent subtitle requests to keep for the config page. */
 const HISTORY_LIMIT = 20;
 
+/** How many recent requests of any kind to keep. */
+const HIT_LIMIT = 50;
+
 const history = [];
+const hits = [];
+
+function truncate(value, limit) {
+	const text = String(value == null ? '' : value);
+	return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
 
 /**
  * Parses the `key=value&key=value` segment into an object.
@@ -50,24 +60,57 @@ function parseExtras(segment) {
 
 /**
  * Records one subtitle request so the config page can show what the client
- * actually sends. Kept in memory only: this is a diagnostic, not user data.
+ * actually sends.
  */
-function recordRequest({ path, extras, type, id, config }) {
+function recordRequest({ path, extras, type, id, config, userAgent }) {
 	history.unshift({
 		at: new Date().toISOString(),
-		path,
+		path: truncate(path, 300),
 		type,
 		id,
 		config: config ? config.slice(0, 24) : '',
+		userAgent: truncate(userAgent, 120),
 		extras: extras || {},
 		keys: Object.keys(extras || {}).sort(),
 	});
 	if (history.length > HISTORY_LIMIT) history.length = HISTORY_LIMIT;
 }
 
-/** Recent requests, newest first. */
+/**
+ * Records every request the server receives, whatever the route.
+ *
+ * `kind` is a coarse label (manifest, subtitles, subtitle-file, config-page…)
+ * so the list stays readable without having to parse the path by eye.
+ */
+function recordHit({ method, path, kind, userAgent, status, durationMs }) {
+	hits.unshift({
+		at: new Date().toISOString(),
+		method,
+		path: truncate(path, 300),
+		kind,
+		userAgent: truncate(userAgent, 120),
+		status,
+		durationMs,
+	});
+	if (hits.length > HIT_LIMIT) hits.length = HIT_LIMIT;
+}
+
+/** Recent subtitle requests, newest first. */
 function recentRequests() {
 	return history;
 }
 
-module.exports = { parseExtras, recordRequest, recentRequests, HISTORY_LIMIT };
+/** Recent requests of any kind, newest first. */
+function recentHits() {
+	return hits;
+}
+
+module.exports = {
+	parseExtras,
+	recordRequest,
+	recentRequests,
+	recordHit,
+	recentHits,
+	HISTORY_LIMIT,
+	HIT_LIMIT,
+};

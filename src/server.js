@@ -9,7 +9,7 @@ const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
-const { parseExtras, recordRequest, recentRequests } = require('./extras');
+const { parseExtras, recordRequest, recentRequests, recordHit, recentHits } = require('./extras');
 const { sourceList, fetchManifest, resourceNames, listFromAddon, knownSources } = require('./sources');
 const { LANGUAGE_OPTIONS } = require('./langs');
 const stats = require('./stats');
@@ -59,6 +59,51 @@ function send(res, status, body, headers = {}) {
 	res.end(body);
 }
 
+/** A coarse label for a request path, so the request list stays readable. */
+function requestKind(pathname) {
+	const segments = String(pathname || '/').split('/').filter(Boolean);
+	if (!segments.length) return 'config-page';
+	if (segments[0] === 'api') return `api/${segments[1] || ''}`;
+	if (segments.includes('manifest.json')) return 'manifest';
+	if (segments.includes('subtitles')) return 'subtitles';
+	if (segments[0] === 'srt') return 'subtitle-file';
+	if (segments.includes('configure')) return 'config-page';
+	if (segments[0] === 'health') return 'health';
+	if (segments[0] === 'logo.png') return 'logo';
+	return 'other';
+}
+
+/**
+ * Writes one line per request to stdout and remembers it for the config page.
+ *
+ * This exists because in-memory counters cannot answer the question that
+ * matters when an addon works in one Stremio client and not another: did the
+ * client call us at all? The container restarts and more than one instance may
+ * serve a request, so counters reset or disagree; stdout survives both, and
+ * carries the User-Agent that tells the clients apart.
+ */
+function logRequest(req, res) {
+	const startedAt = Date.now();
+	const userAgent = String(req.headers['user-agent'] || '');
+	const url = req.url || '/';
+	const pathname = url.split('?')[0];
+
+	res.on('finish', () => {
+		const durationMs = Date.now() - startedAt;
+		console.log(
+			`[req] ${req.method} ${url} -> ${res.statusCode} ${durationMs}ms ua="${userAgent.slice(0, 90)}"`
+		);
+		recordHit({
+			method: req.method,
+			path: url,
+			kind: requestKind(pathname),
+			userAgent,
+			status: res.statusCode,
+			durationMs,
+		});
+	});
+}
+
 function sendJson(res, status, payload) {
 	send(res, status, JSON.stringify(payload), { 'Content-Type': 'application/json; charset=utf-8' });
 }
@@ -86,7 +131,7 @@ async function handleSubtitlesRequest(req, res, config, type, id, baseUrl, rawEx
 	// are recorded before the handler runs — including when it throws, because a
 	// failed request is exactly when knowing what the client sent matters.
 	const extras = parseExtras(rawExtras);
-	recordRequest({ path: req.url, extras, type, id, config });
+	recordRequest({ path: req.url, extras, type, id, config, userAgent: req.headers['user-agent'] });
 	try {
 		const result = await handleSubtitles({ type, id, config, baseUrl, extras });
 		sendJson(res, 200, result);
@@ -325,6 +370,8 @@ function handleStatsStream(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
+	logRequest(req, res);
+
 	if (req.method === 'OPTIONS') {
 		return send(res, 204, '', {
 			'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -372,7 +419,7 @@ const server = http.createServer(async (req, res) => {
 		// What the client actually sends on a subtitle request, newest first.
 		// This is the diagnostic behind the frame-rate and release matching.
 		if (req.method === 'GET' && segments[0] === 'api' && segments[1] === 'requests') {
-			return sendJson(res, 200, { ok: true, requests: recentRequests() });
+			return sendJson(res, 200, { ok: true, requests: recentRequests(), hits: recentHits() });
 		}
 
 		if (segments.length === 1 && segments[0] === 'logo.png') {

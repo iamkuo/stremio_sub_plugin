@@ -12,7 +12,13 @@ const manifest = {
 		'字幕來源為 OpenSubtitles，可於設定頁選擇轉換模式、來源與語言。',
 	resources: ['subtitles'],
 	types: ['movie', 'series'],
-	idPrefixes: ['tt'],
+	// Deliberately no `idPrefixes`. That field narrows which content the client
+	// will ask us about, and `['tt']` — the usual choice, and what most subtitle
+	// addons declare — means anything with a non-IMDb id (a local file, another
+	// catalog's ids) is never sent to us at all. For a subtitle addon there is
+	// nothing to gain from narrowing: an id we cannot look up simply yields an
+	// empty list. Leaving it out is what makes "the addon is installed but never
+	// called" impossible to cause this way.
 	catalogs: [],
 	behaviorHints: {
 		configurable: true,
