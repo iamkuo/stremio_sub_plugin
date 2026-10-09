@@ -109,6 +109,17 @@
 	.reqline:last-child { border-bottom: none; }
 	.reqline .when { color: var(--muted); flex: none; }
 	.reqline .what { color: var(--accent); flex: none; }
+	.checkrow {
+		display: flex; gap: 10px; align-items: flex-start;
+		padding: 7px 0; border-bottom: 1px solid var(--line);
+	}
+	.checkrow:last-child { border-bottom: none; }
+	.checkrow .mark { flex: none; width: 15px; color: var(--muted); font-size: 13px; }
+	.checkrow.done .mark { color: var(--accent); }
+	.checkrow b { display: block; font-weight: 600; font-size: 13px; }
+	.checkrow span { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; }
+	.checkrow.done span { color: var(--muted); }
+	.checkrow:not(.done) b { color: var(--muted); }
 	pre.output {
 		background: var(--panel-2);
 		border: 1px solid var(--line);
@@ -316,6 +327,16 @@
 	</div>
 
 	<div class="card">
+		<h2>安裝進度</h2>
+		<p class="hint" style="margin-top:-6px">
+			由伺服器實際收到的請求推斷，不是猜測。最常卡住的是第二步到第三步之間：
+			Stremio 在你<strong>貼上網址的當下就會抓一次 manifest 來顯示卡片</strong>，
+			但那時候外掛還沒被安裝——你必須在卡片上<strong>再按一次「安裝」</strong>。
+		</p>
+		<div id="installCheck"><div class="hint">載入中…</div></div>
+	</div>
+
+	<div class="card">
 		<h2>所有進來的請求</h2>
 		<p class="hint" style="margin-top:-6px">
 			不分種類，列出這個服務最近收到的每一個請求，包含客戶端送出的 <strong>User-Agent</strong>。
@@ -354,10 +375,11 @@
 	<div class="card">
 		<h2>安裝</h2>
 		<p class="hint" style="margin-top:-6px">
-			最保險的方式是<strong>複製下面的網址，貼進 Stremio「附加元件」頁的搜尋框</strong>再按 Enter。
-			這條路不經過 <code>stremio://</code> 通訊協定，所以在任何系統上都成立；
-			若你按「安裝到 Stremio」之後毫無反應，那就是該通訊協定在你的電腦上沒有註冊成功，
-			而不是外掛有問題。
+			最保險的方式不經過 <code>stremio://</code> 通訊協定，所以在任何系統上都成立：
+			<strong>① 複製下面的網址 → ② 貼進 Stremio「附加元件」頁的搜尋框 → ③ 按 Enter →
+			④ 卡片出現後，再按卡片上的「安裝」</strong>。
+			第 ④ 步最常被漏掉：貼上網址的當下 Stremio 就會抓 manifest 顯示卡片，
+			但那時候還沒安裝，看起來就像裝好了。下面「安裝進度」會告訴你卡在哪一步。
 		</p>
 		<div class="row">
 			<a class="btn" id="installBtn" href="#">安裝到 Stremio</a>
@@ -560,6 +582,7 @@ async function loadRequests() {
 		const data = await (await fetch('api/requests')).json();
 		const rows = data.requests || [];
 		renderHits(data.hits || []);
+		renderInstallCheck(data.hits || []);
 		box.textContent = '';
 		if (!rows.length) {
 			const empty = document.createElement('div');
@@ -620,6 +643,70 @@ function renderHits(rows) {
 		rest.textContent = `${row.path}　${row.userAgent || '（沒有 User-Agent）'}`;
 		line.append(when, what, rest);
 		box.append(line);
+	}
+}
+
+/**
+ * Turns the request log into a step-by-step install check.
+ *
+ * The failure this exists for cannot be seen from either side alone. Stremio
+ * fetches the manifest to *preview* an addon whose URL you just pasted, before
+ * anything is installed, so "the server saw a manifest request" is not evidence
+ * that the addon is active — only a subtitles request is. Without that
+ * distinction a half-finished install looks exactly like a broken addon.
+ */
+function renderInstallCheck(hits) {
+	const box = el('installCheck');
+	const fromStremio = (hits || []).filter((row) => /stremio/i.test(row.userAgent || ''));
+	const sawManifest = fromStremio.some((row) => row.kind === 'manifest');
+	const sawSubtitles = fromStremio.some((row) => row.kind === 'subtitles');
+	const sawFile = fromStremio.some((row) => row.kind === 'subtitle-file');
+
+	const steps = [
+		{
+			done: fromStremio.length > 0,
+			title: 'Stremio 連得到這個服務',
+			doneText: `收到了 ${fromStremio.length} 筆來自 Stremio 的請求。`,
+			todoText: '還沒有收到任何來自 Stremio 的請求。確認外掛網址貼對了，而且那台電腦連得上這個網站。',
+		},
+		{
+			done: sawManifest,
+			title: 'Stremio 讀到 manifest',
+			doneText: 'manifest 已成功回傳，外掛本身沒有問題。',
+			todoText: '把外掛網址貼進 Stremio 的附加元件搜尋框。',
+		},
+		{
+			done: sawSubtitles,
+			title: 'Stremio 已安裝，並開始查詢字幕',
+			doneText: '這是外掛真正生效的證據。',
+			todoText:
+				'還沒有任何字幕請求，代表外掛只是被「預覽」過、還沒真的安裝，' +
+				'或者安裝後你還沒播放任何影片。請到 Stremio 的「已安裝」清單確認它在裡面；' +
+				'不在的話，在剛才那張卡片上再按一次「安裝」。',
+		},
+		{
+			done: sawFile,
+			title: '你已經從這個外掛選過字幕',
+			doneText: '字幕檔已成功下載並處理。',
+			todoText: '還沒有人選過這個外掛的字幕。播放影片後打開字幕選單，挑一筆有「繁體中文」的。',
+		},
+	];
+
+	box.textContent = '';
+	for (const step of steps) {
+		const row = document.createElement('div');
+		row.className = step.done ? 'checkrow done' : 'checkrow';
+		const mark = document.createElement('span');
+		mark.className = 'mark';
+		mark.textContent = step.done ? '✓' : '○';
+		const body = document.createElement('div');
+		const title = document.createElement('b');
+		title.textContent = step.title;
+		const text = document.createElement('span');
+		text.textContent = step.done ? step.doneText : step.todoText;
+		body.append(title, text);
+		row.append(mark, body);
+		box.append(row);
 	}
 }
 

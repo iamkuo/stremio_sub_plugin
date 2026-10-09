@@ -615,6 +615,7 @@ async function httpTests() {
 	assert.ok(page.body.includes('id="primaryPicker"') && page.body.includes('id="secondaryPicker"'), 'both tiers need a picker');
 	assert.ok(page.body.includes('id="translatePicker"'), 'the translation source needs a picker too');
 	assert.ok(page.body.includes('id="plainUrl"'), 'the plain install URL must be offered');
+	assert.ok(page.body.includes('id="installCheck"'), 'the install check must be present');
 	assert.ok(page.body.includes('快取與翻譯統計'), 'the dashboard must be present');
 	assert.ok(page.body.includes('所有進來的請求'), 'the all-requests panel must be present');
 	assert.ok(!page.body.includes('DeepL'), 'the page must not mention DeepL any more');
