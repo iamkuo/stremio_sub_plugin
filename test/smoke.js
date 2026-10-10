@@ -1093,6 +1093,26 @@ async function statsTests() {
 	assert.ok(watch.json.id, 'a key-free watch must be possible');
 
 	assert.strictEqual((await getJson('/api/stats/stream?id=bogus')).status, 404);
+	// A client that gives up part-way must still be recorded. A player that asks
+	// for a subtitle, waits, and then abandons it leaves no other trace, so that
+	// is exactly the case worth being able to see.
+	const abandonedWatch = (await post('/api/stats/watch', { settings: {} })).json.id;
+	await new Promise((resolve) => {
+		const request = http.get(`${BASE}/api/stats/stream?id=${abandonedWatch}`, (response) => {
+			response.on('data', () => {});
+			response.on('end', resolve);
+		});
+		request.on('error', resolve);
+		setTimeout(() => {
+			request.destroy();
+			setTimeout(resolve, 300);
+		}, 300);
+	});
+	const afterAbort = (await getJson('/api/requests')).json.hits || [];
+	assert.ok(
+		afterAbort.some((entry) => entry.aborted && entry.path.includes('/api/stats/stream')),
+		'an abandoned request must still be recorded'
+	);
 
 	const once = await post('/api/stats/once', { settings: {} });
 	assert.strictEqual(once.json.ok, true);
