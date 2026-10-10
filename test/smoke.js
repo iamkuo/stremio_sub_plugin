@@ -345,7 +345,7 @@ const { toGoogleSource, toGoogleTarget, toGoogleLanguage, toSubsenseCode } = req
 	const { sourceList, addonBase, originLabel, subsenseUrl, knownSources, requestedLanguages } = require('../src/sources');
 	const { rankByMatch } = require('../src/match');
 	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
-	const { parseExtras } = require('../src/extras');
+	const { parseExtras, clientLabel } = require('../src/extras');
 	const {
 		composeLabel,
 		releaseLabel,
@@ -396,6 +396,23 @@ function unitTests() {
 	const s2twp = convertSubtitle('把这个软件里面的视频转换一下', { from: 'cn', to: 'twp', mode: 'auto' });
 	assert.strictEqual(s2twp.text, '把這個軟體裡面的影片轉換一下');
 	assert.strictEqual(s2twp.skipped, false);
+	// The Stremio desktop app identifies itself as a bare QtWebEngine build with
+	// no "stremio" anywhere in the string. Recognising it by what it actually
+	// sends is what stops a working desktop client from being reported as one
+	// that never connected.
+	assert.strictEqual(
+		clientLabel(
+			'Mozilla/5.0 (Windows NT 6.2; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) QtWebEngine/5.15.2 Chrome/87.0.4280.144 Safari/537.36'
+		),
+		'Stremio 桌面版（Windows）'
+	);
+	assert.strictEqual(clientLabel('Mozilla/5.0 (X11; Linux x86_64) QtWebEngine/5.15.2'), 'Stremio 桌面版（Linux）');
+	assert.strictEqual(clientLabel('Stremio/5.0.0'), 'Stremio');
+	assert.strictEqual(
+		clientLabel('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0'),
+		'瀏覽器'
+	);
+	assert.strictEqual(clientLabel(''), '未知');
 
 	const skipped = convertSubtitle('他語無倫次，但是提到你的名字', { from: 'cn', to: 'twp', mode: 'auto' });
 	assert.strictEqual(skipped.skipped, true, 'already-Traditional text must be skipped in auto mode');
@@ -778,6 +795,13 @@ async function conversionTests() {
 	const hits = log.json.hits || [];
 	assert.ok(hits.length >= 2, 'the manifest and the subtitle list must both be logged');
 	assert.ok(hits.some((entry) => entry.kind === 'manifest'), 'the manifest request must be logged');
+	assert.ok(hits.every((entry) => entry.client), 'every logged request must name the client it came from');
+	// The log also has to answer on a settings URL: a config page cached from
+	// before the fix asks relatively, and a 404 there reads as "no client has
+	// ever connected" when the opposite is true.
+	const viaConfig = await getJson(`/${encodeConfig({ provider: 'v3', sources: SOURCE_URL, to: 'twp' })}/api/requests`);
+	assert.strictEqual(viaConfig.status, 200, 'the request log must answer on a settings URL too');
+	assert.ok((viaConfig.json.hits || []).length >= 2);
 	assert.ok(hits.some((entry) => entry.kind === 'subtitles'), 'the subtitle request must be logged');
 	assert.ok(hits.every((entry) => entry.status === 200), 'each entry must carry its status');
 	assert.ok(hits.every((entry) => typeof entry.userAgent === 'string'), 'each entry must carry the client');

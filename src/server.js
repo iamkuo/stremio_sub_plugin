@@ -9,7 +9,7 @@ const { manifestForConfig } = require('./manifest');
 const { LOCALES, PAIRS, targetsFor, looksSimplified, convertSubtitle } = require('./opencc');
 const { buildSubtitleFile } = require('./subtitle-file');
 const { handleSubtitles } = require('./subtitles');
-const { parseExtras, recordRequest, recentRequests, recordHit, recentHits } = require('./extras');
+const { parseExtras, clientLabel, recordRequest, recentRequests, recordHit, recentHits } = require('./extras');
 const { sourceList, fetchManifest, resourceNames, listFromAddon, knownSources } = require('./sources');
 const { LANGUAGE_OPTIONS } = require('./langs');
 const stats = require('./stats');
@@ -91,7 +91,8 @@ function logRequest(req, res) {
 	res.on('finish', () => {
 		const durationMs = Date.now() - startedAt;
 		console.log(
-			`[req] ${req.method} ${url} -> ${res.statusCode} ${durationMs}ms ua="${userAgent.slice(0, 90)}"`
+			`[req] ${req.method} ${url} -> ${res.statusCode} ${durationMs}ms ` +
+				`client="${clientLabel(userAgent)}" ua="${userAgent.slice(0, 90)}"`
 		);
 		recordHit({
 			method: req.method,
@@ -419,6 +420,15 @@ const server = http.createServer(async (req, res) => {
 		// What the client actually sends on a subtitle request, newest first.
 		// This is the diagnostic behind the frame-rate and release matching.
 		if (req.method === 'GET' && segments[0] === 'api' && segments[1] === 'requests') {
+			return sendJson(res, 200, { ok: true, requests: recentRequests(), hits: recentHits() });
+		}
+		// The same log, reached through a settings URL. The config page used to
+		// ask for it with a relative path, which resolves against the page and
+		// so became `/<config>/api/requests` — a 404 that left every diagnostics
+		// panel empty and made a working client look like one that never called.
+		// The page now asks absolutely; this keeps a cached copy of the old page
+		// from reporting the same wrong conclusion.
+		if (req.method === 'GET' && segments.length === 3 && segments[1] === 'api' && segments[2] === 'requests') {
 			return sendJson(res, 200, { ok: true, requests: recentRequests(), hits: recentHits() });
 		}
 

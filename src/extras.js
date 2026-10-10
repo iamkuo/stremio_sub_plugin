@@ -32,6 +32,37 @@ function truncate(value, limit) {
 	return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
+/** The desktop platform a QtWebEngine build is running on. */
+function desktopPlatform(userAgent) {
+	if (/windows/i.test(userAgent)) return 'Windows';
+	if (/macintosh|mac os/i.test(userAgent)) return 'macOS';
+	if (/linux|x11/i.test(userAgent)) return 'Linux';
+	return '桌面';
+}
+
+/**
+ * Names the client behind a User-Agent.
+ *
+ * The Stremio desktop app is the whole reason this exists: it identifies itself
+ * as a bare `QtWebEngine/5.15.2 Chrome/…` string with the word "stremio"
+ * nowhere in it, so a plain search for the app's name concludes that no desktop
+ * client has ever connected while that client is in fact asking for subtitles.
+ * Each branch below therefore matches what a client really sends, and the
+ * QtWebEngine branch has to come first because that string also contains
+ * "Chrome" and "Safari".
+ */
+function clientLabel(userAgent) {
+	const ua = String(userAgent || '');
+	if (!ua) return '未知';
+	if (/QtWebEngine/i.test(ua)) return `Stremio 桌面版（${desktopPlatform(ua)}）`;
+	if (/stremio/i.test(ua)) return 'Stremio';
+	if (/okhttp|exoplayer|dalvik|android/i.test(ua)) return 'Stremio Android';
+	if (/curl|wget/i.test(ua)) return 'curl';
+	if (/cfworkers-deployer|warm-ping|cravatar|uptime/i.test(ua)) return '平台檢查';
+	if (/mozilla/i.test(ua)) return '瀏覽器';
+	return '其他';
+}
+
 /**
  * Parses the `key=value&key=value` segment into an object.
  *
@@ -70,6 +101,7 @@ function recordRequest({ path, extras, type, id, config, userAgent }) {
 		id,
 		config: config ? config.slice(0, 24) : '',
 		userAgent: truncate(userAgent, 120),
+		client: clientLabel(userAgent),
 		extras: extras || {},
 		keys: Object.keys(extras || {}).sort(),
 	});
@@ -89,6 +121,7 @@ function recordHit({ method, path, kind, userAgent, status, durationMs }) {
 		path: truncate(path, 300),
 		kind,
 		userAgent: truncate(userAgent, 120),
+		client: clientLabel(userAgent),
 		status,
 		durationMs,
 	});
@@ -107,6 +140,7 @@ function recentHits() {
 
 module.exports = {
 	parseExtras,
+	clientLabel,
 	recordRequest,
 	recentRequests,
 	recordHit,

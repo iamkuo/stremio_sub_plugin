@@ -350,6 +350,13 @@
 			先看這裡：如果連 <code>manifest</code> 都沒有出現，代表該用戶端根本沒有連上這個服務，
 			問題在安裝或網路，不在外掛本身。
 		</p>
+		<div class="hint">
+			<strong>Stremio 桌面版不會自稱 Stremio。</strong>它送出的是
+			<code>QtWebEngine/5.15.2 Chrome/…</code>，字串裡完全沒有 “stremio”，
+			所以靠搜尋 “stremio” 來判斷「有沒有收到請求」會得到錯誤的結論。
+			下面每一列前面的名稱是由 User-Agent 判定的來源用戶端。
+		</div>
+		<div id="clientSummary"></div>
 		<div id="hitLog"><div class="hint">載入中…</div></div>
 		<div class="row" style="margin-top:14px">
 			<button class="btn secondary" id="hitRefreshBtn" type="button">重新整理</button>
@@ -585,8 +592,13 @@ function toggleLanguage(code, boxId, fieldId, stateKey) {
 async function loadRequests() {
 	const box = el('requestLog');
 	try {
-		const data = await (await fetch('api/requests')).json();
+		// Absolute, like every other call on this page. A relative path resolves
+		// against the page, so on the personalized /<config>/configure it became
+		// /<config>/api/requests and every panel below stayed empty — which looks
+		// exactly like "no client ever connected".
+		const data = await (await fetch('/api/requests')).json();
 		const rows = data.requests || [];
+		renderClientSummary(data.hits || []);
 		renderHits(data.hits || []);
 		renderInstallCheck(data.hits || []);
 		box.textContent = '';
@@ -653,6 +665,37 @@ function renderHits(rows) {
 }
 
 /**
+ * Counts the recent requests by client.
+ *
+ * "No requests arrived" and "this panel could not read the log" look identical
+ * from the outside, and the desktop app does not name itself, so one line
+ * saying how many requests came from which client settles a question that the
+ * raw list otherwise makes you squint at.
+ */
+function renderClientSummary(hits) {
+	const box = el('clientSummary');
+	if (!box) return;
+	box.textContent = '';
+	const counts = new Map();
+	for (const row of hits || []) {
+		const name = row.client || '未知';
+		counts.set(name, (counts.get(name) || 0) + 1);
+	}
+	const line = document.createElement('div');
+	line.className = 'hint';
+	line.style.marginTop = '-4px';
+	if (!counts.size) {
+		line.textContent = '這個服務最近沒有收到任何請求。';
+	} else {
+		const parts = [...counts.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.map(([name, count]) => `${name} ×${count}`);
+		line.textContent = `最近 ${(hits || []).length} 筆請求的來源：${parts.join('、')}`;
+	}
+	box.append(line);
+}
+
+/**
  * Turns the request log into a step-by-step install check.
  *
  * The failure this exists for cannot be seen from either side alone. Stremio
@@ -663,7 +706,11 @@ function renderHits(rows) {
  */
 function renderInstallCheck(hits) {
 	const box = el('installCheck');
-	const fromStremio = (hits || []).filter((row) => /stremio/i.test(row.userAgent || ''));
+	// Matches the label the server derived, not the raw User-Agent: the desktop
+	// app sends a bare QtWebEngine string with no "stremio" in it, so searching
+	// the raw string reported "no Stremio client has ever connected" while the
+	// desktop app was asking for subtitles.
+	const fromStremio = (hits || []).filter((row) => /stremio/i.test(row.client || row.userAgent || ''));
 	const sawManifest = fromStremio.some((row) => row.kind === 'manifest');
 	const sawSubtitles = fromStremio.some((row) => row.kind === 'subtitles');
 	const sawFile = fromStremio.some((row) => row.kind === 'subtitle-file');
@@ -673,7 +720,9 @@ function renderInstallCheck(hits) {
 			done: fromStremio.length > 0,
 			title: 'Stremio 連得到這個服務',
 			doneText: `收到了 ${fromStremio.length} 筆來自 Stremio 的請求。`,
-			todoText: '還沒有收到任何來自 Stremio 的請求。確認外掛網址貼對了，而且那台電腦連得上這個網站。',
+			todoText:
+				'還沒有收到任何來自 Stremio 的請求。確認外掛網址貼對了，而且那台電腦連得上這個網站。' +
+				'（桌面版是以 QtWebEngine 的身分出現的；若下面「所有進來的請求」看得到它，這一項就不會是空的。）',
 		},
 		{
 			done: sawManifest,
