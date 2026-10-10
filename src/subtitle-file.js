@@ -6,6 +6,7 @@ const { translateSubtitle } = require('./google');
 const { toGoogleSource, toGoogleTarget, canonicalLang } = require('./langs');
 const { resolveDownloadLink, listSubtitles } = require('./sources');
 const { decodeToken } = require('./token');
+const { looksLikeAss, assToSrt } = require('./ass');
 const stats = require('./stats');
 const { lastCueEnd, scaleTimings, detectFpsFactor } = require('./fps');
 
@@ -216,10 +217,23 @@ async function buildSubtitleFile({ cfg, token, configSegment }) {
 	if (!url) throw Object.assign(new Error('找不到字幕來源'), { statusCode: 404 });
 
 	const { buffer, contentType } = await downloadWithFailover(cfg, handle, url);
-	const source = decodeBuffer(buffer, contentType);
+	let source = decodeBuffer(buffer, contentType);
+
+	// An Advanced SubStation script is not an SRT: left as it is, the player
+	// finds no cue in it and reports "no tracks", and the translation path sends
+	// the script's own header to the translator. Converting here means every
+	// path below — convert, translate or serve untouched — sees an ordinary SRT.
+	let convertedFromAss = false;
+	if (looksLikeAss(source)) {
+		const asSrt = assToSrt(source);
+		if (asSrt) {
+			source = asSrt;
+			convertedFromAss = true;
+		}
+	}
 
 	const baseName = String(handle.name || 'subtitle').replace(/\.(srt|vtt|ass|ssa)$/i, '') || 'subtitle';
-	const extension = /\.vtt$/i.test(handle.name || '') ? 'vtt' : 'srt';
+	const extension = !convertedFromAss && /\.vtt$/i.test(handle.name || '') ? 'vtt' : 'srt';
 
 	let body;
 	let translatedCharacters = 0;

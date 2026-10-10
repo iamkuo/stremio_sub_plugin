@@ -62,7 +62,37 @@ const LONG_ENGLISH_SRT = Array.from({ length: 120 }, (_, index) =>
 	[String(index + 1), `${timestamp(index * 2)} --> ${timestamp(index * 2 + 1)}`, `Line ${index + 1}`, ''].join('\n')
 ).join('\n');
 
+/** An Advanced SubStation script, shaped like the ones sources really serve. */
+const ASS_SUBTITLE = [
+'[Script Info]',
+'Title: English (US)',
+'ScriptType: v4.00+',
+'Collisions: Normal',
+'',
+'[V4+ Styles]',
+'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+'Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1',
+'',
+'[Events]',
+'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+'Dialogue: 0,0:00:00.95,0:00:03.25,Default,,0,0,0,,Mum, congratulations.',
+'Comment: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,a translator note that must not be shown',
+'Dialogue: 0,0:00:05.03,0:00:06.08,Default,,0,0,0,,{\\i1}Line one{\\i0}\\NLine two',
+'Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,{\\p1}m 0 0 l 100 0 100 100 0 100{\\p0}',
+'Dialogue: 0,0:00:09.00,0:00:10.00,Default,,0,0,0,,A sign with {\\pos(320,240)}positioning',
+'',
+].join('\n');
+
 const MOCK_IDS = {
+	// Advanced SubStation, the common release format for anime. It is not SRT
+	// with different punctuation: served unchanged the player finds no cue in it
+	// at all and reports "no tracks".
+	tt7070707: {
+		body: ASS_SUBTITLE,
+		encoding: 'utf8',
+		contentType: 'text/x-ssa; charset=utf-8',
+		lang: 'zht',
+	},
 	tt1111111: { body: SIMPLIFIED_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'zht' },
 	tt2222222: { body: SIMPLIFIED_SRT, encoding: 'gbk', contentType: 'application/x-subrip', lang: 'zht' },
 	tt3333333: { body: TRADITIONAL_SRT, encoding: 'utf8', contentType: 'application/x-subrip; charset=utf-8', lang: 'zht' },
@@ -342,15 +372,16 @@ const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/goog
 const { clampPerLanguageLimit, MAX_PER_LANGUAGE_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
 const { toGoogleSource, toGoogleTarget, toGoogleLanguage, toSubsenseCode } = require('../src/langs');
-	const {
-		sourceList,
-		addonBase,
-		originLabel,
-		subsenseUrl,
-		knownSources,
-		requestedLanguages,
-		usableUrl,
-	} = require('../src/sources');
+const {
+	sourceList,
+	addonBase,
+	originLabel,
+	subsenseUrl,
+	knownSources,
+	requestedLanguages,
+	usableUrl,
+} = require('../src/sources');
+const { looksLikeAss, assToSrt } = require('../src/ass');
 	const { rankByMatch } = require('../src/match');
 	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
 	const { parseExtras, clientLabel } = require('../src/extras');
@@ -436,6 +467,11 @@ function unitTests() {
 	);
 	assert.strictEqual(usableUrl(''), '');
 	assert.strictEqual(usableUrl('not a url'), '');
+	// Advanced SubStation is detected by what it is, not by the name the source
+	// gave the entry, because sources label `.ass` files as `.srt`.
+	assert.strictEqual(looksLikeAss(ASS_SUBTITLE), true);
+	assert.strictEqual(looksLikeAss(SIMPLIFIED_SRT), false);
+	assert.strictEqual(assToSrt('[Script Info]\nTitle: x\n'), '', 'a script with no dialogue yields nothing');
 
 	const skipped = convertSubtitle('他語無倫次，但是提到你的名字', { from: 'cn', to: 'twp', mode: 'auto' });
 	assert.strictEqual(skipped.skipped, true, 'already-Traditional text must be skipped in auto mode');
@@ -739,6 +775,19 @@ async function conversionTests() {
 	assert.ok(converted.body.includes('我已經把這個問題解決了'));
 	assert.ok(!converted.body.includes('这个软件'), 'no Simplified characters may survive');
 	assert.ok(converted.body.includes('00:00:01,000 --> 00:00:03,000'));
+
+	// An Advanced SubStation script through the whole pipeline. What reaches the
+	// player has to be a subtitle: served unchanged the player finds no cue in
+	// the script at all and reports "no tracks".
+	const ass = await fetchFirstSubtitle(CFG, 'tt7070707');
+	assert.strictEqual(ass.status, 200);
+	assert.ok(!ass.body.includes('[Script Info]'), 'the script header must never reach the player');
+	assert.ok(ass.body.includes('00:00:00,950 --> 00:00:03,250'), 'centiseconds must become milliseconds');
+	assert.ok(ass.body.includes('Mum, congratulations.'), 'a comma inside the text must survive');
+	assert.ok(ass.body.includes('Line one\nLine two'), 'an ASS line break must become a real one');
+	assert.ok(!ass.body.includes('translator note'), 'a Comment line is a note, not dialogue');
+	assert.ok(!ass.body.includes('l 100 0'), 'vector drawing data must not become text');
+	assert.ok(ass.headers.get('content-disposition').includes('.srt'), 'a converted script is served as SRT');
 
 	// The untouched passthrough path is exercised by the English entry in the
 	// bilingual case below, where the original file really is served as-is.
