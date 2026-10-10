@@ -656,7 +656,9 @@ function renderHits(rows) {
 		when.textContent = new Date(row.at).toLocaleTimeString();
 		const what = document.createElement('span');
 		what.className = 'what';
-		what.textContent = `${row.kind} · ${row.status}`;
+		// "中斷" is the interesting case: the client asked and then gave up, which
+		// a player reports as a generic failure with no reason attached.
+		what.textContent = `${row.kind} · ${row.aborted ? `${row.status} 中斷` : row.status}`;
 		const rest = document.createElement('span');
 		rest.textContent = `${row.path}　${row.userAgent || '（沒有 User-Agent）'}`;
 		line.append(when, what, rest);

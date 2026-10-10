@@ -114,7 +114,7 @@ function recordRequest({ path, extras, type, id, config, userAgent }) {
  * `kind` is a coarse label (manifest, subtitles, subtitle-file, config-page…)
  * so the list stays readable without having to parse the path by eye.
  */
-function recordHit({ method, path, kind, userAgent, status, durationMs }) {
+function recordHit({ method, path, kind, userAgent, status, durationMs, aborted }) {
 	hits.unshift({
 		at: new Date().toISOString(),
 		method,
@@ -124,6 +124,7 @@ function recordHit({ method, path, kind, userAgent, status, durationMs }) {
 		client: clientLabel(userAgent),
 		status,
 		durationMs,
+		aborted: Boolean(aborted),
 	});
 	if (hits.length > HIT_LIMIT) hits.length = HIT_LIMIT;
 }

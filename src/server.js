@@ -87,11 +87,14 @@ function logRequest(req, res) {
 	const userAgent = String(req.headers['user-agent'] || '');
 	const url = req.url || '/';
 	const pathname = url.split('?')[0];
+	let written = false;
 
-	res.on('finish', () => {
+	const write = (aborted) => {
+		if (written) return;
+		written = true;
 		const durationMs = Date.now() - startedAt;
 		console.log(
-			`[req] ${req.method} ${url} -> ${res.statusCode} ${durationMs}ms ` +
+			`[req] ${req.method} ${url} -> ${aborted ? `${res.statusCode} 中斷` : res.statusCode} ${durationMs}ms ` +
 				`client="${clientLabel(userAgent)}" ua="${userAgent.slice(0, 90)}"`
 		);
 		recordHit({
@@ -101,8 +104,16 @@ function logRequest(req, res) {
 			userAgent,
 			status: res.statusCode,
 			durationMs,
+			aborted,
 		});
-	});
+	};
+
+	res.on('finish', () => write(false));
+	// A client that gives up part-way — a player timeout, or the video being
+	// closed — never fires 'finish'. Logging only on 'finish' therefore hides
+	// exactly the case where knowing that the request happened matters most: a
+	// player that asks for a subtitle, waits, and abandons it.
+	res.on('close', () => write(!res.writableFinished));
 }
 
 function sendJson(res, status, payload) {
@@ -153,8 +164,35 @@ async function handleSubtitleFile(res, config, token) {
 		});
 	} catch (error) {
 		console.error('[subtitle-file]', error.message);
-		send(res, error.statusCode || 502, `# ${error.message}\n`, { 'Content-Type': 'text/plain; charset=utf-8' });
+		send(res, 200, diagnosticSubtitle(error.message), {
+			'Content-Type': 'application/x-subrip; charset=utf-8',
+			'Cache-Control': 'no-store',
+		});
 	}
+}
+
+/**
+ * A one-cue subtitle that states why the real one could not be produced.
+ *
+ * A failed download reaches the player as "no tracks" — an error that names
+ * neither the subtitle nor the reason, and that reads exactly like "the addon
+ * has nothing for this video". Returning a valid file instead puts the reason
+ * on screen, where the person who can act on it will actually see it.
+ */
+function diagnosticSubtitle(message) {
+	const reason = String(message || '未知錯誤')
+		.replace(/[\r\n]+/g, ' ')
+		.slice(0, 300);
+	return [
+		'1',
+		'00:00:00,000 --> 00:00:15,000',
+		`[OpenCC 字幕] 這個字幕無法產生：${reason}`,
+		'',
+		'2',
+		'00:00:15,000 --> 00:00:30,000',
+		'請看設定頁的「最近收到的字幕請求」與「所有進來的請求」。',
+		'',
+	].join('\n');
 }
 
 /** POST /api/config – single source of truth for encoding settings into a URL. */

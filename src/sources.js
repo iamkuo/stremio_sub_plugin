@@ -223,6 +223,50 @@ function extraQuery(extras) {
 	return query ? `/${query}` : '';
 }
 
+/**
+ * Turns an upstream's download link into one this server can actually fetch.
+ *
+ * SubSense answers with `http://127.0.0.1:11470/subtitles.srt?from=<real url>`,
+ * which is Stremio's local streaming server: an address that only exists on the
+ * machine playing the video. Offered as-is it becomes an entry that is listed,
+ * chosen, and then fails at play time with nothing to show for it. The real URL
+ * is in `from=`, so that is what gets used; an entry pointing at the viewer's
+ * own machine with nothing behind it is dropped rather than offered.
+ *
+ * @returns {string} a fetchable URL, or '' when the entry cannot be served
+ */
+/**
+ * Turns an upstream's download link into one this server can actually fetch.
+ *
+ * SubSense answers with `http://127.0.0.1:11470/subtitles.srt?from=<real url>`,
+ * which is Stremio's local streaming server: an address that only exists on the
+ * machine playing the video. Offered as-is it becomes an entry that is listed,
+ * chosen, and then fails at play time with nothing to show for it. The real URL
+ * is in `from=`, so that is what gets used; an entry pointing at Stremio's own
+ * server with nothing behind it is dropped rather than offered.
+ *
+ * Only Stremio's port is treated this way. Another loopback address is left
+ * alone: from here it cannot be told apart from a source that genuinely is
+ * local, and dropping it would silently discard entries that do work.
+ *
+ * @returns {string} a fetchable URL, or '' when the entry cannot be served
+ */
+function usableUrl(rawUrl) {
+	const url = String(rawUrl || '').trim();
+	if (!url) return '';
+	let parsed;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return '';
+	}
+	if (!/^(localhost|127\.|0\.0\.0\.0|\[::1\]$)/i.test(parsed.hostname)) return url;
+	const inner = parsed.searchParams.get('from');
+	if (inner && /^https?:/i.test(inner)) return inner;
+	return parsed.port === '11470' ? '' : url;
+}
+
+
 /** Asks one upstream addon for its subtitle list. */
 async function listFromAddon(base, type, id, extras) {
 	const payload = await fetchJson(`${base}/subtitles/${type}/${sanitizeId(id)}${extraQuery(extras)}.json`);
@@ -230,20 +274,25 @@ async function listFromAddon(base, type, id, extras) {
 	const origin = originLabel(base);
 
 	return subtitles
-		.filter((sub) => sub && sub.url)
-		.map((sub) => ({
-			id: String(sub.id || sub.url),
-			url: sub.url,
-			lang: normalizeLang(sub.lang),
-			// Addons disagree on what to call a release: OpenSubtitles v3 uses
-			// `subtitleFileName`, SubSense uses `fileName`/`releaseName`/`label`.
-			// Reading only one of them leaves the picker full of bare numbered
-			// rows, which is exactly what the label is meant to avoid.
-			name: String(
-				sub.subtitleFileName || sub.movieReleaseName || sub.fileName || sub.releaseName || sub.label || ''
-			).trim(),
-			origin,
-		}));
+		.map((sub) => {
+			if (!sub) return null;
+			const url = usableUrl(sub.url);
+			if (!url) return null;
+			return {
+				id: String(sub.id || sub.url),
+				url,
+				lang: normalizeLang(sub.lang),
+				// Addons disagree on what to call a release: OpenSubtitles v3 uses
+				// `subtitleFileName`, SubSense uses `fileName`/`releaseName`/`label`.
+				// Reading only one of them leaves the picker full of bare numbered
+				// rows, which is exactly what the label is meant to avoid.
+				name: String(
+					sub.subtitleFileName || sub.movieReleaseName || sub.fileName || sub.releaseName || sub.label || ''
+				).trim(),
+				origin,
+			};
+		})
+		.filter(Boolean);
 }
 
 /** Builds the REST `languages` query from every requested language. */
@@ -383,6 +432,7 @@ module.exports = {
 	fetchManifest,
 	listFromAddon,
 	listSubtitles,
+	usableUrl,
 	resolveDownloadLink,
 	normalizeLang,
 	langList,

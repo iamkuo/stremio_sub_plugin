@@ -342,7 +342,15 @@ const { batchTexts: googleBatchTexts, parseTranslations } = require('../src/goog
 const { clampPerLanguageLimit, MAX_PER_LANGUAGE_LIMIT } = require('../src/config');
 const stats = require('../src/stats');
 const { toGoogleSource, toGoogleTarget, toGoogleLanguage, toSubsenseCode } = require('../src/langs');
-	const { sourceList, addonBase, originLabel, subsenseUrl, knownSources, requestedLanguages } = require('../src/sources');
+	const {
+		sourceList,
+		addonBase,
+		originLabel,
+		subsenseUrl,
+		knownSources,
+		requestedLanguages,
+		usableUrl,
+	} = require('../src/sources');
 	const { rankByMatch } = require('../src/match');
 	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
 	const { parseExtras, clientLabel } = require('../src/extras');
@@ -413,6 +421,21 @@ function unitTests() {
 		'瀏覽器'
 	);
 	assert.strictEqual(clientLabel(''), '未知');
+	// A source can answer with a link to the viewer's own machine. Taken at face
+	// value it becomes an entry that is listed, chosen, and then fails with
+	// nothing to show for it, so the real link is unwrapped and a link with
+	// nothing behind it is dropped.
+	assert.strictEqual(
+		usableUrl('http://127.0.0.1:11470/subtitles.srt?from=https%3A%2F%2Fdl.example.org%2Fa.srt'),
+		'https://dl.example.org/a.srt'
+	);
+	assert.strictEqual(usableUrl('http://localhost:11470/subtitles.srt'), '', 'a bare local link must be dropped');
+	assert.strictEqual(
+		usableUrl('https://subs5.strem.io/en/download/x.srt'),
+		'https://subs5.strem.io/en/download/x.srt'
+	);
+	assert.strictEqual(usableUrl(''), '');
+	assert.strictEqual(usableUrl('not a url'), '');
 
 	const skipped = convertSubtitle('他語無倫次，但是提到你的名字', { from: 'cn', to: 'twp', mode: 'auto' });
 	assert.strictEqual(skipped.skipped, true, 'already-Traditional text must be skipped in auto mode');
@@ -954,11 +977,14 @@ async function googleFallbackTests() {
 	const noFallback = encodeConfig({ provider: 'v3', sources: SOURCE_URL, fallbackLangs: '' });
 	assert.deepStrictEqual((await getJson(`/${noFallback}/subtitles/movie/tt4444444.json`)).json, { subtitles: [] });
 
-	// A failing endpoint yields a readable error, not a broken subtitle.
+	// A failing endpoint must still reach the player as something readable. A
+	// bare error status arrives as "no tracks", which names neither the subtitle
+	// nor the reason, so the reason travels inside a valid one-cue file instead.
 	googleFailuresLeft = 2; // both attempts of the only configured host
 	const failingList = await getJson(`/${auto}/subtitles/movie/tt8888888.json`);
 	const failingFile = await get(new URL(failingList.json.subtitles[0].url).pathname);
-	assert.strictEqual(failingFile.status, 502);
+	assert.strictEqual(failingFile.status, 200);
+	assert.match(failingFile.body, /^1\n00:00:00,000 --> 00:00:15,000/, 'the notice must be a valid subtitle file');
 	assert.ok(failingFile.body.includes('Google 翻譯失敗'), 'the error must name the cause');
 
 	// A translated language obeys the same per-language count as any other.
