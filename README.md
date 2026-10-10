@@ -501,6 +501,9 @@ PUB=http://localhost:3000 node test/live-google.js tt2380307   # 對真實 Googl
 
 ## 疑難排解
 
+每一次「字幕載不進來」的完整成因、修法與驗證，都整理在
+[docs/no-tracks-history.md](docs/no-tracks-history.md)（含已排除的方向，避免重複查錯）。
+
 - **Stremio 顯示「沒有字幕」**：先在設定頁按「**檢查來源**」。若某個外掛顯示「宣告有字幕，
   但實測 0 筆」，代表它是串流外掛的空殼，請把它從清單移除。若所有來源都正常卻仍沒有中文
   字幕，可改用 OpenSubtitles.com REST API，或把該語言設為「主要語言」讓 Google 翻譯接手。
