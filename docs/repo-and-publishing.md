@@ -77,3 +77,68 @@ git -c credential.helper='' \
 4. `POST config/git/complete` 要帶 `targetSha: R`。
 
 完成後 `origin` 會換成 Manus repo，GitHub 那份就變成靜態快照（除非用上面的 mirror 推送）。
+
+## 2026-10-24：切回 Manus 失敗在平台端
+
+放棄「換對話開新卡」之後，回頭去讀 `GET config/git/transfer`，發現**卡片按下後
+operation 其實是有紀錄的**，只是狀態是壞的。這一步是整件事的關鍵：
+
+```json
+{
+  "operationId": "wdo_5123b5b7cdd9a5f5ef6eca5c",
+  "direction": "to_manus",
+  "status": "awaiting_confirmation",
+  "expectedRevision": 1,
+  "workspaceReady": false,
+  "message": "Repository preparation needs attention. The original repository
+              is still active. Abort this operation before starting again; a
+              created repository may already exist and will not be deleted
+              automatically."
+}
+```
+
+### 學到的兩件事
+
+**1. `expectedRevision` 不是 config 的 revision。**
+`GET config` 回 `revision: 3`，我拿 2 和 3 去 abort 都只得到 `canonical_changed`。
+正確的值是**這個 operation 自己的 `expectedRevision`（1）**，藏在
+`GET config/git/transfer` 裡。用 1 呼叫 `POST config/git/abort` 就立刻成功。
+**教訓：abort 的 revision 要從 transfer 讀，不要從 config 猜。**
+
+**2. 重開一張卡沒用，因為壞的是平台端。**
+abort 成功、重新 `PUT config/git` 之後，平台給了**新的** operationId
+（`wdo_03f18727bd98f0b114568a44`），使用者按下去卻得到同一句
+「**無法確認儲存庫狀態。請先請求 Manus 檢查，然後重試。**」
+再讀 transfer，狀態與上面一字不差——`workspaceReady: false`、
+「Repository preparation needs attention」。
+
+也就是說：**平台無法為這個專案準備好 Manus 端的目標儲存庫。**
+重試會得到同樣結果（決定性失敗，不是暫時性錯誤），而平台自己的指示是
+「不要 push、不要宣稱完成、不要重複建立儲存庫」。
+
+### 已經排除的方向（別再查一次）
+
+- **GitHub repo 本身完全正常**：`iamkuo/stremio_sub_plugin` 公開、未封存、
+  `default_branch: main`、`main` 指到 `fb16711`、權限 `push: true`，
+  `git ls-remote` 正常，Manus connector app 的 `repository_selection` 是 `all`。
+- **本機 workspace 完全乾淨**：`git status --porcelain` 空、沒有 rebase/merge
+  進行中、沒有 lock 檔、只有一個 worktree、只有 `origin` 一個 remote。
+  所以 `workspaceReady: false` 指的是**平台端的目標**，不是本地工作區。
+- **GitHub 上沒有殘留的「平台建立的」repo**：列出使用者全部 repo，
+  在 2026-10-10 前後只有使用者自己建的 `stremio_sub_plugin` 與
+  `bilinovel-kobo-workflow`。所以那顆「created repository」在 Manus 內部，不在 GitHub。
+- **不是建置失敗**：`GET infra/overview` 回 `deployStatus: success`，
+  系統日誌是空的；正式站跑的是 `75f2a8b`，而修正 `5ab8c44` 從未被部署。
+
+### 同時被鎖住的發布
+
+只要 canonical 還在 GitHub，這個專案就**無法發布**：
+
+| 方式 | 結果 |
+| --- | --- |
+| 推 checkpoint 觸發 auto_publish | 「Checkpoint saved, but automatic publication was not confirmed.」 |
+| `POST config/publish` | `github_canonical_active` |
+| Dashboard Publish | 「此發布已不可用，請重新整理後再試。」 |
+
+所以「切回 Manus」不是偏好問題，而是**恢復部署能力的唯一途徑**；
+而這條路目前卡在平台端。需要 Manus 客服清理專案內那顆殘留的儲存庫。
