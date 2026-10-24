@@ -142,3 +142,44 @@ abort 成功、重新 `PUT config/git` 之後，平台給了**新的** operation
 
 所以「切回 Manus」不是偏好問題，而是**恢復部署能力的唯一途徑**；
 而這條路目前卡在平台端。需要 Manus 客服清理專案內那顆殘留的儲存庫。
+
+### 第三次嘗試：改用「斷開綁定」也失敗
+
+既然 to_manus 過不去，下一個想法是**直接斷開 GitHub 綁定**。結果兩邊都不通：
+
+- **API 沒有這條路。** `PUT config/git` 帶 `{"git":{}}` 被拒：
+
+  ```json
+  {"ok":false,"error":{"code":"validation_failed",
+   "field_errors":[{"path":"git.canonical","code":"required"}]}}
+  ```
+
+  `git-canonical.md` 也明講「`git.canonical` 是 request-only」、
+  「**省略 `git` 永遠不會斷開**」。所謂的 Disconnect 是**確認卡上的另一個動作**，
+  不是 API 呼叫。
+
+- **卡片本身壞掉。** 重新送卡後拿到第三個 operationId
+  （`wdo_ae6fccb81deb67a753965a21`），使用者按下去得到同一句
+  「無法確認儲存庫狀態」。
+
+三個 operationId、三次同樣的結果：
+
+| operationId | 結果 |
+| --- | --- |
+| `wdo_5123b5b7cdd9a5f5ef6eca5c` | `workspaceReady: false`，已中止 |
+| `wdo_03f18727bd98f0b114568a44` | 同樣狀態，已中止 |
+| `wdo_ae6fccb81deb67a753965a21` | 同樣狀態，已中止 |
+
+三次都中止掉了，目前專案**沒有殘留的 pending operation**，canonical 仍是 GitHub。
+
+### 平台自己的指引怎麼說
+
+`git-canonical.md` 第 50 行正好描述我們的情況，而且給的指示就是「停下來」：
+
+> If preparation needs attention and no ready target is returned, **do not push or repeat
+> repository creation**. A network/DB failure may have happened after GitHub created the
+> repository. Explain the uncertainty and abort the operation if it cannot continue;
+> keep the source active and never delete that repository automatically.
+
+所以正確的做法是：如實說明、中止、保持 GitHub 為 canonical、**不要**自動刪除任何東西。
+剩下的只能靠平台支援處理。
