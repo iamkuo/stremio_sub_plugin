@@ -382,6 +382,7 @@ const {
 	usableUrl,
 } = require('../src/sources');
 const { looksLikeAss, assToSrt } = require('../src/ass');
+const { numberingAlternatives, buildEpisodeIndex, absoluteTarget } = require('../src/episodes');
 	const { rankByMatch } = require('../src/match');
 	const { lastCueEnd, scaleTimings, detectFpsFactor, COMPRESS } = require('../src/fps');
 	const { parseExtras, clientLabel } = require('../src/extras');
@@ -472,6 +473,25 @@ function unitTests() {
 	assert.strictEqual(looksLikeAss(ASS_SUBTITLE), true);
 	assert.strictEqual(looksLikeAss(SIMPLIFIED_SRT), false);
 	assert.strictEqual(assToSrt('[Script Info]\nTitle: x\n'), '', 'a script with no dialogue yields nothing');
+	// Anime is numbered two ways at once: the release counts the whole run, the
+	// metadata source counts by season. Specials sit outside that run, so
+	// counting them would shift every later episode by their number.
+	const index = buildEpisodeIndex([
+		{ season: 0, episode: 1 },
+		{ season: 0, episode: 2 },
+		{ season: 1, episode: 1 },
+		{ season: 1, episode: 2 },
+		{ season: 2, episode: 1 },
+	]);
+	assert.deepStrictEqual(index.run, [
+		{ season: 1, episode: 1 },
+		{ season: 1, episode: 2 },
+		{ season: 2, episode: 1 },
+	]);
+	assert.deepStrictEqual(absoluteTarget(index, 1), { season: 1, episode: 1 });
+	assert.deepStrictEqual(absoluteTarget(index, 3), { season: 2, episode: 1 });
+	assert.strictEqual(absoluteTarget(index, 4), null, 'past the end of the run');
+	assert.strictEqual(absoluteTarget(index, 0), null, 'numbering starts at one');
 
 	const skipped = convertSubtitle('他語無倫次，但是提到你的名字', { from: 'cn', to: 'twp', mode: 'auto' });
 	assert.strictEqual(skipped.skipped, true, 'already-Traditional text must be skipped in auto mode');
@@ -1201,6 +1221,34 @@ async function liveTest() {
 	}
 }
 
+/**
+ * The real episode that exposed the numbering split. Cinemeta is a live service,
+ * so an outage is reported rather than failed — but when it answers, the mapping
+ * must be exact, because a wrong one would offer subtitles for the wrong episode.
+ */
+async function numberingLiveTest() {
+	try {
+		assert.deepStrictEqual(
+			await numberingAlternatives('series', 'tt26743760:1:49'),
+			['tt26743760:3:1'],
+			'absolute episode 49 of this series is season 3 episode 1'
+		);
+		assert.deepStrictEqual(
+			await numberingAlternatives('series', 'tt26743760:3:1'),
+			[],
+			'a season and episode that exist must never be rewritten'
+		);
+		assert.deepStrictEqual(
+			await numberingAlternatives('series', 'tt26743760:4:1'),
+			[],
+			'a season the metadata does not list must not be guessed at'
+		);
+		console.log('live      ok (episode numbering: 1:49 -> 3:1)');
+	} catch (error) {
+		console.log(`live      numbering skipped (${error.message})`);
+	}
+}
+
 async function main() {
 	await new Promise((resolve) => mockSource.listen(MOCK_PORT, '127.0.0.1', resolve));
 	await new Promise((resolve) => mockFiles.listen(FILE_PORT, '127.0.0.1', resolve));
@@ -1214,6 +1262,7 @@ async function main() {
 	await googleFallbackTests();
 	await statsTests();
 	await liveTest();
+	await numberingLiveTest();
 
 	console.log('\nAll checks passed.');
 	process.exit(0);

@@ -5,6 +5,7 @@ const { convertSubtitle, TRADITIONAL_TARGETS } = require('./opencc');
 const { translateSubtitle } = require('./google');
 const { toGoogleSource, toGoogleTarget, canonicalLang } = require('./langs');
 const { resolveDownloadLink, listSubtitles } = require('./sources');
+const { numberingAlternatives } = require('./episodes');
 const { decodeToken } = require('./token');
 const { looksLikeAss, assToSrt } = require('./ass');
 const stats = require('./stats');
@@ -106,12 +107,15 @@ function hostOf(url) {
  */
 async function alternativeUrls(cfg, handle, failedUrl) {
 	if (!handle.type || !handle.id || !handle.lang) return [];
-	let items;
-	try {
-		items = await listSubtitles(cfg, handle.type, handle.id, {});
-	} catch {
-		return [];
-	}
+	// The episode is looked up under every numbering that might name it: a client
+	// can ask for `tt26743760:1:49` where the sources index season 3 episode 1,
+	// and in that case the sources that could actually serve a replacement are
+	// never reached by the id that failed. See src/episodes.js.
+	const ids = [handle.id, ...(await numberingAlternatives(handle.type, handle.id))];
+	const gathered = await Promise.all(
+		ids.map((each) => listSubtitles(cfg, handle.type, each, {}).catch(() => []))
+	);
+	const items = gathered.flat();
 	const seen = new Set([failedUrl]);
 	const urls = [];
 	for (const item of items) {

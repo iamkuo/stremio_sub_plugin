@@ -4,6 +4,7 @@ const { decodeConfig, clampPerLanguageLimit } = require('./config');
 const { outputLang, convertSubtitle, looksSimplified } = require('./opencc');
 const { listSubtitles, normalizeLang } = require('./sources');
 const { sourceList } = require('./sources');
+const { numberingAlternatives } = require('./episodes');
 const { canonicalLang, canonicalList, languageName, toGoogleLanguage } = require('./langs');
 const { rankByMatch } = require('./match');
 const { fetchRuntimeSeconds } = require('./cinemeta');
@@ -210,7 +211,12 @@ function disambiguateLabels(subtitles) {
 
 async function handleSubtitles({ type, id, config, baseUrl, extras }) {
 	const cfg = decodeConfig(config);
-	const items = dedupe(await listSubtitles(cfg, type, id, extras));
+	// The client may number an episode absolutely where the sources number it by
+	// season, so both ids are asked for. Dedupe is by download URL, so an episode
+	// found under both numberings is still listed once. See src/episodes.js.
+	const ids = [id, ...(await numberingAlternatives(type, id))];
+	const gathered = await Promise.all(ids.map((each) => listSubtitles(cfg, type, each, extras).catch(() => [])));
+	const items = dedupe(gathered.flat());
 	const pathSegment = config || 'default';
 	const chineseLang = outputLang(cfg.to);
 	const subtitles = [];
